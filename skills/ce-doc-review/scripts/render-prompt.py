@@ -3,6 +3,7 @@ import argparse
 import json
 from pathlib import Path
 import re
+import sys
 
 parser = argparse.ArgumentParser(description="Render a reviewer prompt from the original template.")
 parser.add_argument("slots", type=Path, help="UTF-8 JSON object of named string slots")
@@ -22,4 +23,4 @@ for name in sorted(set(re.findall(pattern, template))):
     if not isinstance(slots.get(name), str):
         parser.error(f"{name} must be supplied as a string")
 
-print(re.sub(pattern, lambda match: slots[match[1]], template))
+sys.stdout.buffer.write((re.sub(pattern, lambda match: slots[match[1]], template) + "\n").encode("utf-8"))
