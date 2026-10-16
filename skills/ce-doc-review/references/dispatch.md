@@ -12,15 +12,18 @@ For each selected reviewer, read `references/personas/<reviewer-name>.md` and pa
 
 Render every reviewer's prompt for every round with `scripts/render-prompt.py` from this skill's directory. It reads the original subagent template and fills its named slots once, preserving inserted text literally. Never update a previously rendered prompt.
 
-Write a UTF-8 JSON object with the keys below, without their surrounding braces. Each value is a string. Resolve a working Python interpreter by probing execution, then run:
+Write a UTF-8 JSON object with the keys below, without their surrounding braces. Each value is a string. Keep inputs and outputs in a per-run directory under the OS temporary directory. Resolve a working Python interpreter by probing execution, then run:
 
 ```bash
-PY="$(for c in python3 python py; do command -v "$c" >/dev/null 2>&1 && "$c" -c '' >/dev/null 2>&1 && { echo "$c"; break; }; done)"
-[ -n "$PY" ] || { echo "no working Python 3 interpreter on PATH" >&2; exit 1; }
+SKILL_DIR="<absolute path of the directory containing the ce-doc-review SKILL.md you read>";
+SLOTS_JSON="<absolute path to this reviewer's slots JSON>";
+PROMPT_PATH="<absolute output path for this reviewer and round>";
+PY="$(for c in python3 python py; do command -v "$c" >/dev/null 2>&1 && "$c" -c '' >/dev/null 2>&1 && { echo "$c"; break; }; done)";
+[ -n "$PY" ] || { echo "no working Python 3 interpreter on PATH" >&2; exit 1; };
 "$PY" "$SKILL_DIR/scripts/render-prompt.py" "$SLOTS_JSON" > "$PROMPT_PATH"
 ```
 
-`SKILL_DIR` is this skill's absolute directory. `SLOTS_JSON` is the JSON input path, and `PROMPT_PATH` is the output path for this reviewer and round. Dispatch the output only when the command succeeds. For a later round, update the JSON values and render again from the original template.
+Dispatch the output only when the command succeeds. For a later round, update the JSON values and render again from the original template.
 
 | Variable | Value |
 |----------|-------|
