@@ -8,8 +8,9 @@ describe("skill-eval-cell host plans pin measured gotchas", () => {
   const promptFile = path.join(cwd, "prompt.md")
 
   test("every host unsets CLAUDECODE and forces NO_COLOR", () => {
-    const env = cellEnv({ CLAUDECODE: "1", CLICOLOR_FORCE: "1", GH_FORCE_TTY: "1" })
+    const env = cellEnv({ CLAUDECODE: "1", OMPCODE: "1", CLICOLOR_FORCE: "1", GH_FORCE_TTY: "1" })
     expect(env.CLAUDECODE).toBeUndefined()
+    expect(env.OMPCODE).toBeUndefined()
     expect(env.CLICOLOR_FORCE).toBeUndefined()
     expect(env.GH_FORCE_TTY).toBeUndefined()
     expect(env.NO_COLOR).toBe("1")
@@ -57,6 +58,12 @@ describe("skill-eval-cell host plans pin measured gotchas", () => {
     expect(readOnly.argv).toEqual(["opencode", "run", "--dir", cwd, "task"])
     expect(readOnly.argv).not.toContain("--auto")
     expect(attestCurrentHost({ OPENCODE_TERMINAL: "1" })).toBe("opencode")
+  })
+
+  test("under omp the copied CLAUDECODE does not drop claude from the default peers", () => {
+    const env = { OMPCODE: "1", CLAUDECODE: "1" }
+    expect(attestCurrentHost(env)).toBe("unknown")
+    expect(resolveRunHosts({ env, onPath: () => true }).run).toContain("claude")
   })
 
   test("from grok the default peers are claude, codex, and opencode", () => {
@@ -131,5 +138,24 @@ describe("skill-eval-cell host plans pin measured gotchas", () => {
     expect(prompt).toContain("FILES_READ:")
     expect(prompt).toContain("~/.config/opencode")
     expect(prompt).toContain("project .opencode")
+  })
+
+  test("grok takes an explicit reasoning effort instead of the operator default", () => {
+    const base = { cwd: "/tmp/ws", prompt: "p", promptFile: "/tmp/p.md" }
+    expect(planHost("grok", base).argv).not.toContain("--reasoning-effort")
+    const argv = planHost("grok", { ...base, reasoningEffort: "high" }).argv
+    expect(argv.slice(argv.indexOf("--reasoning-effort"), argv.indexOf("--reasoning-effort") + 2)).toEqual(["--reasoning-effort", "high"])
+  })
+
+  test("wrapPrompt points each companion skill at its bundled copy", () => {
+    const prompt = wrapPrompt({
+      skillDir: "/tmp/skill",
+      workspace: "/tmp/ws",
+      task: "Plan it.",
+      companions: [{ name: "ce-doc-review", dir: "/tmp/skills/ce-doc-review" }],
+    })
+    expect(prompt).toContain("/tmp/skills/ce-doc-review/SKILL.md")
+    expect(prompt).toContain("Do not use an installed plugin copy of `ce-doc-review`")
+    expect(prompt.toLowerCase()).not.toContain("eval")
   })
 })

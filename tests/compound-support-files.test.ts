@@ -143,6 +143,51 @@ describe("ce-compound YAML safety rule presence", () => {
   })
 })
 
+// A learning whose guidance depends on something outside the repo can name what
+// would retire it, and the refresh checks that condition. The field
+// stays optional so existing learnings remain valid; the drift test above covers
+// the refresh copies of the schema and template.
+describe("learning retirement condition", () => {
+  test("schema.yaml offers retire_when as an optional field on both tracks", async () => {
+    const parsed = load(
+      await readFile(path.join(PLUGIN_ROOT, "ce-compound", "references/schema.yaml"), "utf8"),
+    ) as {
+      required_fields?: Record<string, unknown>
+      optional_fields?: Record<string, { description?: string }>
+    } | null
+    expect(parsed?.optional_fields?.retire_when?.description).toBeTruthy()
+    expect(parsed?.required_fields?.retire_when).toBeUndefined()
+  })
+
+  test("each resolution template track carries a retire_when line", async () => {
+    const raw = await readFile(
+      path.join(PLUGIN_ROOT, "ce-compound", "assets/resolution-template.md"),
+      "utf8",
+    )
+    const tracks = raw.split(/^## Knowledge Track Template$/m)
+    expect(tracks).toHaveLength(2)
+    for (const track of tracks) {
+      expect(track.match(/^retire_when:/gm)).toHaveLength(1)
+    }
+  })
+
+  test("ce-compound-refresh checks and classifies by retire_when", async () => {
+    // Pin each rule's own paragraph with its ownership or safe direction, so the
+    // token surviving elsewhere in the file cannot mask a deleted rule.
+    const rules: Array<[string, RegExp]> = [
+      ["investigate.md", /^[^\n]*`retire_when`[^\n]*orchestrator[^\n]*$/m],
+      ["classify.md", /^[^\n]*`retire_when`[^\n]*recommended action[^\n]*$/m],
+    ]
+    for (const [name, rule] of rules) {
+      const raw = await readFile(
+        path.join(PLUGIN_ROOT, "ce-compound-refresh", "references", name),
+        "utf8",
+      )
+      expect(raw, `${name} lost the retire_when rule`).toMatch(rule)
+    }
+  })
+})
+
 // The body carries the conditions and one pointer per step; the detail moved into
 // references the body names at that step. Split the guard the same way: the body
 // pins the mandatory reads (a lost pointer silently drops the whole reference),
@@ -216,5 +261,26 @@ describe("light-webserver.js drift across ce-brainstorm and ce-prototype", () =>
       ),
     )
     expect(contents[1]).toBe(contents[0])
+  })
+})
+
+// The template restates each track's problem_type list; schema.yaml owns it.
+// A type missing from the template has no template to follow (issue #1799).
+describe("resolution template track lists match schema.yaml", () => {
+  test("each track's Use for list names exactly the schema's problem_types", async () => {
+    const schema = load(
+      await readFile(path.join(PLUGIN_ROOT, "ce-compound", "references/schema.yaml"), "utf8"),
+    ) as { tracks: Record<string, { problem_types: string[] }> }
+    const template = await readFile(
+      path.join(PLUGIN_ROOT, "ce-compound", "assets/resolution-template.md"),
+      "utf8",
+    )
+    const useFor = [...template.matchAll(/^Use for: (.+)$/gm)].map((m) =>
+      [...m[1].matchAll(/`([^`]+)`/g)].map((t) => t[1]).sort(),
+    )
+    expect(useFor).toEqual([
+      [...schema.tracks.bug.problem_types].sort(),
+      [...schema.tracks.knowledge.problem_types].sort(),
+    ])
   })
 })

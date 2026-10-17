@@ -4,7 +4,7 @@ End-user-facing documentation for compound-engineering plugin skills. Each page 
 
 For runtime behavior and contributor reference, the `SKILL.md` in each skill's source folder under `skills/` is authoritative.
 
-Checkout-local defaults shared across skills are documented in [Compound Engineering configuration](./configuration.md).
+Checkout-local defaults shared across skills are documented in [Compound Engineering configuration](./configuration.md). Prescriptive rule packs the pipeline grounds in are documented in [Compound Packs](./packs.md).
 
 Artifact paths shown throughout these pages (`docs/plans/`, `docs/solutions/`, `docs/ideation/`, and the rest) are the **defaults**. A project can relocate every CE artifact folder under one repo-relative root with `docs_root`; when it is set, read the shown paths as `<your-docs_root>/plans/`, `<your-docs_root>/solutions/`, and so on. See [Artifact root](./configuration.md#artifact-root).
 
@@ -28,7 +28,7 @@ Artifact paths shown throughout these pages (`docs/plans/`, `docs/solutions/`, `
 └── /ce-compound      "Capture what we learned."
 ```
 
-`/ce-compound` is the closer that makes the loop *compound*: it writes learnings into `docs/solutions/`, which the next iteration's `/ce-brainstorm` and `/ce-plan` read as grounding. That return arrow is the whole point. `/ce-ideate` is an optional prelude for when you don't yet know what to work on. Everything else in this catalog is either an anchor around the loop or an on-demand tool used when a specific need arises, not a step you walk through every time.
+`/ce-compound` is the closer that makes the loop *compound*: it writes learnings into `docs/solutions/`, which the next iteration's `/ce-brainstorm` and `/ce-plan` read as grounding. `/ce-ideate` is an optional prelude for when you don't yet know what to work on. Everything else in this catalog is either an anchor around the loop or an on-demand tool used when a specific need arises, not a step you walk through every time.
 
 ---
 
@@ -65,14 +65,15 @@ Invoked when a specific need arises, not part of any chain.
 
 | Skill | Description |
 |-------|-------------|
-| [`/ce-pov`](./ce-pov.md) | A project-grounded verdict: adopt/hold/reject, a document take, or a position on supplied approaches. Optional named/`oracle` panel. |
-| [`/ce-explain`](./ce-explain.md) | A durable teaching document for a concept, a diff, an idea, or a window of recent work, with a self-check section when the material warrants one. |
+| [`/ce-bakeoff`](./ce-bakeoff.md) | Independently develop and select competing approaches to improve brainstorming and planning decisions. Planning runs it on its own when a costly technical choice stays open; brainstorming only on request; also usable standalone. |
+| [`/ce-pov`](./ce-pov.md) | A project-grounded judgment on adoption, documents, or supplied approaches, with an oracle panel for independent model opinions. |
+| [`/ce-explain`](./ce-explain.md) | An evidence-backed explanation of how something works and why, delivered for learning or further work; standalone teaching artifacts when useful. |
 | [`/ce-prototype`](./ce-prototype.md) | Build a throwaway prototype so someone can experience how the product should work, feel, or read, then write those decisions into an existing plan or continue into brainstorm or plan |
 | [`/ce-debug`](./ce-debug.md) | Find the root cause of broken behavior: causal chain, predictions, then an optional fix and PR handoff |
 | [`/ce-code-review`](./ce-code-review.md) | Structured review of a diff or PR: skill-local personas, confidence-gated findings, and the rules you write in `CODING_STANDARDS.md` |
 | [`/ce-doc-review`](./ce-doc-review.md) | Structured review of a requirements or plan document: findings, not a holistic verdict |
-| [`/ce-simplify-code`](./ce-simplify-code.md) | Refine recently changed code for reuse, quality, and efficiency, with behavior preserved |
-| [`/ce-optimize`](./ce-optimize.md) | Metric-driven optimization loops with parallel experiments and a durable experiment log |
+| [`/ce-simplify-code`](./ce-simplify-code.md) | Refine changed code for reuse, quality, and efficiency, and prune low-value tests and comments, with behavior preserved |
+| [`/ce-optimize`](./ce-optimize.md) | Keep confirmed improvements to a measurable target: attribute cost or score variants |
 | [`/ce-retune`](./ce-retune.md) | Retune a skill corpus for a new model: baseline, noise floor, then measured cut passes |
 
 ---
@@ -100,7 +101,7 @@ Invoked when a specific need arises, not part of any chain.
 
 | Skill | Description |
 |-------|-------------|
-| [`/lfg`](./lfg.md) | Hands-off pipeline through an open PR (plan, implement, review, ship, bounded CI watch). Pushes without prompting when a remote exists; local commits only otherwise. Does not merge. |
+| [`/lfg`](./lfg.md) | Hands-off pipeline through an open PR. Routes the request to a verified work source (a plan, a `ce-debug` fix for a bug, or a brainstorm then plan when product shape is unsettled and you are present), then implements, reviews, captures learnings, ships, and watches CI. Pushes without prompting when a remote exists; local commits only otherwise. Merging stays with you unless granted. |
 
 ---
 
@@ -124,12 +125,14 @@ Invoked when a specific need arises, not part of any chain.
 
 | Skill | Description |
 |-------|-------------|
+| [`/ce-noslop`](./ce-noslop.md) | Rewrite, check, or draft prose with no AI tells that reads on the first read; every fact preserved. Sibling skills invoke it where they write. |
+| [`/wtf`](./wtf.md) | Explain the last message, or a supplied file, link, or passage, in plain language. Explains rather than rewrites; keeps caveats and adds no claims. Manual invoke only. |
 | [`/ce-promote`](./ce-promote.md) | Draft announcement copy for a shipped feature (X, changelog, LinkedIn, email, blog, demo). Drafts only; never posts. |
-| [`/ce-resolve-pr-feedback`](./ce-resolve-pr-feedback.md) | One pass to evaluate, fix, and reply to PR review comments, including nitpicks. Babysit is the watch that calls this. |
+| [`/ce-resolve-pr-feedback`](./ce-resolve-pr-feedback.md) | Judge and fix PR feedback, then complete conversations after publication; can save a local fix batch for caller publication and resume it later. Babysit is the watch that calls this. |
 | [`/ce-dogfood`](./ce-dogfood.md) | Hands-off browser QA of the branch: map flows, fix small breakages, write a report. Manual invoke only. |
 | [`/ce-test-browser`](./ce-test-browser.md) | End-to-end browser tests of the current diff using a host-native browser with `agent-browser` fallback. Does not check out a PR or branch. |
 | [`/ce-test-xcode`](./ce-test-xcode.md) | Build and test an iOS app on the simulator (screenshots, logs, human verification). Not XCUITest. |
-| [`/ce-setup`](./ce-setup.md) | Diagnose optional tool capabilities and create or repair repo `config.yaml` |
+| [`/ce-setup`](./ce-setup.md) | Diagnose optional tool capabilities, create or repair repo `config.yaml`, and scaffold a Compound Pack |
 | [`/ce-handoff`](./ce-handoff.md) | Write a session handoff, or find and orient from a selected source. Does not auto-continue. |
 
 ---

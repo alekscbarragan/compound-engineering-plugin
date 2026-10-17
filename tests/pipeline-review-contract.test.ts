@@ -38,26 +38,27 @@ describe("ce-work review contract", () => {
     expect(shipping).toContain("ce-simplify-code")
     expect(shipping).toContain("3. **Code Review**")
 
-    // Single portable path: ce-code-review self-sizes (lite vs full roster).
+    // Single portable path: ce-code-review self-sizes. Callers do not classify.
     // The former Tier 1 (harness-native /review) / Tier 2 (escalation) split is gone,
     // along with harness-specific review detection.
     expect(shipping).toContain("ce-code-review")
     expect(shipping).toContain("as the single path")
+    expect(shipping).toContain("Do not classify lite versus full")
     expect(shipping).not.toContain("**Tier 1 -- harness-native review")
     expect(shipping).not.toContain("(escalation only)")
     // Skip only for a purely mechanical diff; everything else is reviewed
     expect(shipping).toContain("mechanical diff")
     // The one escalation signal ce-code-review cannot infer is passed explicitly
     expect(shipping).toContain("depth:full")
-    // Autonomous Residual Gate branch keeps unattended pipelines unblocked
-    expect(shipping).toContain("Non-interactive / autonomous")
+    // Missing authority stays blocked in unattended pipelines.
+    expect(shipping).toContain("Autonomous runs return the blocker")
     // Two-step review -> fix, consumed by followup
     expect(shipping).toContain("review-findings-followup.md")
     expect(shipping).toMatch(/review is not fix|3a\. Review|3b\. Apply/i)
     expect(shipping).toContain("mode:agent")
 
-    // Quality checklist requires receipt or exact skip phrase (completion gate)
-    expect(shipping).toContain("Code review completion gate")
+    // The review step and the ship handoff both bind the completion gate
+    expect(shipping).toContain("Completion gate (standalone shipping)")
     expect(shipping).toContain("Ship-handoff gate")
   })
 
@@ -95,9 +96,9 @@ describe("ce-work review contract", () => {
       "**If the top-level `ce-code-review` attempt cannot produce a completed receipt:**",
       "4. **Residual Work Gate**",
     )
-    const reviewSummaryStart = shipping.indexOf("## Code Review")
-    expect(reviewSummaryStart, "Code Review summary anchor not found").toBeGreaterThanOrEqual(0)
-    const reviewSummary = shipping.slice(reviewSummaryStart)
+    // The gate is stated once in the review step; the former end-of-file recap duplicated it.
+    expect(shipping).not.toContain("## Code Review\n")
+    expect(shipping).not.toContain("## Quality Checklist")
 
     // Always-loaded body owns the gate (not only the lazy reference)
     expect(content).toContain("Code-review completion gate")
@@ -122,10 +123,8 @@ describe("ce-work review contract", () => {
     expect(shipping).toContain("Never substitute")
     // The caller decides only from the owning boundary: definition load or the
     // terminal top-level receipt. Internal review events cannot authorize fallback.
-    for (const section of [unavailableBranch, reviewSummary]) {
-      expect(section).toContain("intermediate internal events never establish caller-owned unavailability")
-      expect(section).toContain("A missing dedicated runner, executable, or binary is not evidence")
-    }
+    expect(unavailableBranch).toContain("intermediate internal events never establish caller-owned unavailability")
+    expect(unavailableBranch).toContain("A missing dedicated runner, executable, or binary is not evidence")
     expect(unavailableBranch).toContain("proceed through 3a and let `ce-code-review` own its recovery")
   })
 
@@ -151,17 +150,17 @@ describe("ce-work review contract", () => {
     // Testing deliberation exists in the execution loop
     expect(content).toContain("Assess testing coverage")
 
-    // Deliberation is between "Run tests after changes" and "Mark task as completed"
+    // Deliberation is between "Run tests after changes" and marking the task completed
     const runTestsIdx = content.indexOf("Run tests after changes")
     const assessIdx = content.indexOf("Assess testing coverage")
-    const markDoneIdx = content.indexOf("Mark task as completed")
+    const markDoneIdx = content.indexOf("mark the task completed")
     expect(runTestsIdx).toBeLessThan(assessIdx)
     expect(assessIdx).toBeLessThan(markDoneIdx)
   })
 
-  test("quality checklist says 'Testing addressed' not 'Tests pass'", async () => {
+  test("final validation says 'Testing addressed' not 'Tests pass'", async () => {
     const content = await readRepoFile("skills/ce-work/SKILL.md")
-    // Quality checklist extracted to references/shipping-workflow.md
+    // Final validation lives in references/shipping-workflow.md
     const shipping = await readRepoFile("skills/ce-work/references/shipping-workflow.md")
 
     // New language present in reference file
@@ -349,13 +348,13 @@ describe("missing-owner blocked seam parity (ce-plan/ce-work -> lfg)", () => {
     ])
     const cePlanEnvelope = sliceSection(
       cePlan,
-      "In pipeline mode, every required-owner failure returns",
+      "In pipeline mode, every required-reference failure returns",
       "### Phase 0: Output, Resume, and Scope",
     )
     const lfgEnvelope = sliceSection(
       planBrief,
       "An explicit `status: blocked` return is terminal",
-      "Read the plan metadata before continuing",
+      "Inspect the returned plan",
     )
     for (const field of ["`status: blocked`", "`phase`", "`blocker`", "`recovery_path`"]) {
       expect(cePlanEnvelope).toContain(field)
@@ -366,7 +365,8 @@ describe("missing-owner blocked seam parity (ce-plan/ce-work -> lfg)", () => {
     // 2026-08-21 eval (P9): a host that reads every phase owner at kernel load never re-reads the terminal owner,
     // so the late-owner blocked path was unreachable on Claude; the kernel must say an early read does not count.
     expect(cePlan).toContain("a read made before that phase does not satisfy it")
-    expect(cePlan).toContain("a terminal owner is read again at its step even when already in context")
+    // Restated in plain language (2026-09); the pin guards the re-read condition, not the word "owner".
+    expect(cePlan).toContain("is read again at its step even when already in context")
     expect(lfg).toContain("Blocked status outranks an existing artifact")
     expect(lfg).toContain("Only absence of both a blocker and a plan file")
     // 2026-08-21 eval: a stale plan already under <root>/plans/ satisfied the gate once; the gate keys on the reported path.
@@ -513,7 +513,7 @@ describe("ce-debug regression test selection", () => {
     )
     // The gate must be anchored at the question site, not stated only in an early section.
     const gateIdx = content.indexOf("Same-turn presentation before the gate")
-    const askIdx = content.indexOf("Then ask (per **Blocking questions**)")
+    const askIdx = content.indexOf("ask (per **Blocking questions**) which path to take")
     expect(gateIdx).toBeGreaterThan(-1)
     expect(askIdx).toBeGreaterThan(gateIdx)
   })
@@ -673,8 +673,8 @@ describe("ce-plan review contract", () => {
       "Invoke the `ce-doc-review` skill with arguments `mode:non-interactive <plan-path>`",
     )
     expect(content).toContain("ce-doc-review` with `mode:non-interactive`")
-    expect(content).toContain(
-      "They invoke `ce-doc-review` with `mode:non-interactive` and the plan path",
+    expect(content).toMatch(
+      /invoke `ce-doc-review` with `mode:non-interactive` and the plan path/i,
     )
     expect(skillStub).toMatch(/the default is non-interactive \(`mode:non-interactive`\)/i)
     expect(content).not.toContain("skip document-review and return control")
@@ -686,13 +686,11 @@ describe("ce-plan review contract", () => {
   test("handoff options expose deeper-review opt-in alongside ce-work", async () => {
     const content = await readRepoFile("skills/ce-plan/references/plan-handoff.md")
 
-    // Both executors are offered; ce-work is always the recommended default (it is the
-    // correctly-layered entry point that reaches goal/workflow engines itself), while goal
-    // mode is the opt-in preference for driving the work through the harness's goal loop.
+    // ce-work is the only executor offered and carries the recommended marker. A /goal
+    // option bypassed ce-work's review receipt and WIP protections, so it was removed.
     expect(content).toContain("**Start `ce-work`** - Build and ship the plan in this session")
-    expect(content).toContain("**Run it as a `/goal`**")
-    expect(content).toMatch(/`ce-work` \(option 1\) always carries \*\(recommended\)\*/i)
-    expect(content).toContain("Codex `create_goal` in the available tool list")
+    expect(content).not.toContain("**Run it as a `/goal`**")
+    expect(content).toContain("render option 1 as **Start `ce-work`** *(recommended)*")
 
     // Deeper review is a first-class menu fixture so users can engage with surfaced findings
     // without relying on free-form prompting; routed through ce-doc-review without non-interactive mode.
@@ -704,7 +702,7 @@ describe("ce-plan review contract", () => {
     // collapses back to a 4-option AskUserQuestion-friendly shape on Claude Code. FYI-only
     // state also hides the option since ce-doc-review's walkthrough is gated to actionable
     // findings (anchor 75/100, gated_auto/manual) and FYIs (anchor 50) bypass it.
-    expect(content).toContain("Hide `Decide on the review's open items` (option 3) when no actionable findings remain")
+    expect(content).toContain("Show `Decide on the review's open items` (option 2) only when the resolved review state has")
     expect(content).toContain("proposed_fixes_count + decisions_count > 0")
 
     // Summary line above the menu surfaces autofix counts and remaining-bucket counts
@@ -825,13 +823,10 @@ describe("ce-doc-review contract", () => {
     expect(synthesis).toContain("`gated_auto`")
     expect(synthesis).toContain("`manual`")
 
-    // Cross-persona agreement promotion (replaces +0.10 boost)
+    // Promotion requires independently verified evidence at the higher anchor.
     expect(synthesis).toContain("Cross-Persona Agreement Promotion")
     expect(synthesis).toContain("one anchor step")
-    expect(synthesis).toContain("`independence_verified` is `true`")
-    // Pins the rule, not the mechanism that carried it: an unverified peer stays
-    // attributed evidence and cannot promote. The twin *fingerprint* exception it
-    // used to name was deleted with 3.3's string matching.
+    expect(synthesis).toContain("`independence_verified: true`")
     expect(synthesis).toContain("cannot trigger anchor promotion")
     expect(synthesis).toContain("Cursor default/Auto")
 
@@ -857,29 +852,46 @@ describe("ce-doc-review contract", () => {
     expect(synthesis).toContain("Review complete")
   })
 
-  test("terminal question is three-option by default with label adaptation", async () => {
+  test("non-interactive result records a cleanly skipped cross-model peer", async () => {
+    const synthesis = await readRepoFile(
+      "skills/ce-doc-review/references/synthesis-and-presentation.md",
+    )
+    const review = await readRepoFile(
+      "skills/ce-doc-review/references/cross-model-review.md",
+    )
+    const nonInteractive = sliceSection(
+      synthesis,
+      "**Non-interactive mode:**",
+      "**Interactive mode:**",
+    )
+
+    const template = sliceSection(nonInteractive, "```", "Review complete\n```")
+
+    expect(nonInteractive).toContain("peer.outcome: folded")
+    expect(nonInteractive).toContain("peer.outcome: in-process-fallback")
+    expect(template).toContain("peer.outcome: <folded | in-process-fallback>")
+    expect(template).toContain("cross-model <lens> peer: <what happened to the peer's result>")
+    expect(template).toContain("<lens>: in-process fallback (cross-model peer not run: <reason>)")
+    expect(template).toContain("whole-doc: not run (cross-model peer not run: <reason>)")
+
+    expect(review).not.toContain("stay silent in non-interactive mode")
+    expect(review).not.toContain("emit no user-facing prose")
+    expect(review).toContain("references/synthesis-and-presentation.md")
+  })
+
+  test("completed doc review returns control without authorizing another workflow", async () => {
     const synthesis = await readRepoFile(
       "skills/ce-doc-review/references/synthesis-and-presentation.md"
     )
-
-    // Three options when fixes are queued
-    expect(synthesis).toContain("Apply decisions and proceed to <next stage>")
-    expect(synthesis).toContain("Apply decisions and re-review")
-    expect(synthesis).toContain("Exit without further action")
-
-    // Two options in the zero-actionable case with the adapted label
-    expect(synthesis).toContain("fixes_applied_count == 0")
-    expect(synthesis).toContain("zero-actionable case")
-
-    // Next-stage substitution rules documented, readiness-aware: a
-    // requirements-only artifact routes to planning, implementation-ready to
-    // execution (unified and legacy classifications both covered).
+    expect(synthesis).toContain('Return "Review complete"')
+    expect(synthesis).toContain("does not need a terminal question")
     expect(synthesis).toContain("requirements-only unified plan")
     expect(synthesis).toContain("implementation-ready unified plan")
-    expect(synthesis).toContain("legacy standalone requirements doc")
-    expect(synthesis).toContain("legacy implementation plan")
-    expect(synthesis).toContain("ce-plan")
-    expect(synthesis).toContain("ce-work")
+    expect(synthesis).toContain("user's existing request authorizes it")
+    // 2026-09-14: "return control to the caller" read as a handoff cue that ended
+    // the turn in an inline lfg run; the invariant is the nested return, stated as
+    // the skill ending rather than the turn.
+    expect(synthesis).toContain("ends this skill, not the turn")
   })
 
   // Split by load-time: the question-tool rules and the dispatch backpressure
@@ -897,7 +909,7 @@ describe("ce-doc-review contract", () => {
     // which is read before any question can fire.
     expect(content).toContain("## Interactive mode rules")
     expect(content).toContain("`references/modes.md`")
-    expect(content).toMatch(/fires the tool or falls back loudly/)
+    expect(content).toMatch(/calls the tool or falls back loudly/)
     expect(content).toContain("bounded parallelism")
     // The body keeps the condition that a capacity rejection is backpressure;
     // the queueing mechanics live in the dispatch reference read at that step.
@@ -927,7 +939,7 @@ describe("ce-doc-review contract", () => {
     expect(dispatch).toContain("queue the remainder")
   })
 
-  // Reproduced on Codex (gpt-5.6-sol), 4/4 runs: a plan whose only storage-related
+  // Reproduced on Codex (gpt-6-sol), 4/4 runs: a plan whose only storage-related
   // content was an internal schema migration activated security-lens, justified as
   // "changes data-store entries ... with deployment-ordering risks". The bare
   // "data handling" trigger matches every plan. security-lens is one of the
@@ -1148,9 +1160,9 @@ describe("ce-compound vocabulary is corpus-first, not Rails-specific (issue #126
     // Both classification paths moved into the references the body names at
     // their step; the corpus-first rule is asserted where each one now lives.
     const research = await readRepoFile("skills/ce-compound/references/research.md")
-    const contextAnalyzer = sliceSection(research, "#### 1. **Context Analyzer**", "#### 2. **Solution Extractor**")
-    expect(contextAnalyzer).toMatch(/existing docs .*<root>\/solutions\//)
-    expect(contextAnalyzer).toMatch(/directory/)
+    const classify = sliceSection(research, "#### 1. **Classify** (this context)", "#### 2. **Draft the body** (this context)")
+    expect(classify).toMatch(/existing docs .*<root>\/solutions\//)
+    expect(classify).toMatch(/directory/)
     // lightweight mode classifies inline and must carry the same rule
     const lightweight = await readRepoFile("skills/ce-compound/references/lightweight.md")
     expect(lightweight).toMatch(/existing docs/)
@@ -1218,6 +1230,15 @@ describe("ce-compound Phase 1 artifact contract", () => {
     expect(phase2.toLowerCase()).toContain("fall back")
   })
 
+  test("classification and drafting stay in the context that holds the conversation", async () => {
+    // Fresh subagents never received the conversation they were told to extract
+    // from; only the corpus search is delegated.
+    const research = await readRepoFile("skills/ce-compound/references/research.md")
+    expect(research).not.toContain("Context Analyzer")
+    expect(research).not.toContain("Solution Extractor")
+    expect(research).toContain("#### 3. **Related Docs Finder** (subagent)")
+  })
+
   test("no longer imposes an absolute no-write rule on Phase 1 subagents", async () => {
     const content = (await readRepoFile("skills/ce-compound/SKILL.md")) +
       (await readRepoFile("skills/ce-compound/references/research.md"))
@@ -1245,8 +1266,8 @@ describe("concept-teaching seam parity (ce-commit-push-pr <-> lfg)", () => {
     // Both ends name the same trailer format (ce-commit-push-pr prints it from the
     // apply reference its Step 5 mandates).
     expect(skill).toContain("New concepts:")
-    // The trailer is consumed in the shipping tail lfg's step 8 reads first.
-    expect(await readRepoFile("skills/lfg/references/shipping-tail.md")).toContain("New concepts:")
+    // The trailer is consumed in the shipping reference lfg's step 9 reads first.
+    expect(await readRepoFile("skills/lfg/references/shipping.md")).toContain("New concepts:")
 
     // The callsite passes the mode explicitly rather than relying on defaults
     expect(lfg).toContain("invoke the `ce-commit-push-pr` skill with `mode:pipeline branding:on`")
@@ -1255,7 +1276,7 @@ describe("concept-teaching seam parity (ce-commit-push-pr <-> lfg)", () => {
     // for the active host rather than hardcoding one harness's syntax. That report
     // moved into the reference lfg's step 10 names as a required read before it
     // prints anything, so the rendering contract is asserted there.
-    const closeOut = await readRepoFile("skills/lfg/references/shipping-tail.md")
+    const closeOut = await readRepoFile("skills/lfg/references/shipping.md")
     expect(closeOut).toContain("New concept introduced:")
     expect(closeOut).toContain("run <rendered ce-explain invocation> to go deeper")
     expect(closeOut).toContain("run <rendered ce-babysit-pr invocation> to watch it through review to merge")
@@ -1284,6 +1305,43 @@ describe("explicit Compound Engineering branding provenance", () => {
     expect(debug).toContain("invoke the `ce-commit-push-pr` skill with `branding:on`.")
     expect(debug).not.toContain("`/ce-commit-push-pr branding:on`")
     expect(debugHandoff).not.toContain("`/ce-commit-push-pr branding:on`")
+  })
+})
+
+describe("ce-simplify-code pipeline callers", () => {
+  // Without the token, a caller's run could be judged user-started and stop at a
+  // report instead of applying fixes. A proof-test path passed bare would read as a
+  // user-named scope and narrow the run to the one test it must not touch.
+  const callsites: Array<[string, string]> = [
+    ["skills/ce-work/references/implementation-loop.md", "invoke it with `mode:pipeline` at phase boundaries"],
+    ["skills/ce-work/references/shipping-workflow.md", "**`ce-simplify-code`** with `mode:pipeline`"],
+    ["skills/lfg/SKILL.md", "Invoke the `ce-simplify-code` skill with `mode:pipeline`"],
+    ["skills/lfg/references/debug-return.md", "pass `mode:pipeline`"],
+    ["skills/ce-debug/references/post-fix-handoff.md", "Invoke `ce-simplify-code` with `mode:pipeline`"],
+  ]
+
+  test("every caller passes mode:pipeline and labels the proof test", async () => {
+    for (const [file, invocation] of callsites) {
+      const content = await readRepoFile(file)
+      expect(content, file).toContain(invocation)
+    }
+    const proofCarriers = [
+      "skills/ce-work/references/implementation-loop.md",
+      "skills/ce-work/references/shipping-workflow.md",
+      "skills/lfg/references/review-followup.md",
+      "skills/lfg/references/debug-return.md",
+      "skills/ce-debug/references/post-fix-handoff.md",
+    ]
+    for (const file of proofCarriers) {
+      expect(await readRepoFile(file), file).toContain("`proof-test:<path>`")
+    }
+  })
+
+  test("the callee documents both tokens and treats the proof test as context", async () => {
+    const skill = await readRepoFile("skills/ce-simplify-code/SKILL.md")
+    expect(skill).toContain("mode:pipeline")
+    expect(skill).toContain("proof-test:<path>")
+    expect(skill).toContain("The proof-test path is context for Step 3, never scope")
   })
 })
 

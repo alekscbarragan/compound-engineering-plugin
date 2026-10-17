@@ -78,7 +78,7 @@ Committed: `fix(review): cover empty-format branch + tighten export perms` (work
 |---|------|-------|----------|
 | 1 | `orders_controller.rb:12` | Broad rescue masking failed permission check | correctness |
 
-Detail lines for Pre-existing and history-dependent P0/P1 findings may include the same short provenance string the artifact `evidence` carries (e.g. `provenance: a1b2c3d Alice 2024-08-12 - harden rescue`) when that history was load-bearing — do not dump full-file blame into the report.
+Detail lines for Pre-existing and history-dependent P0/P1 findings may include the same short provenance string the artifact `evidence` carries (e.g. `provenance: a1b2c3d Alice 2024-08-12 - harden rescue`) when the finding depends on that history. Do not dump full-file blame into the report.
 
 ### Learnings & Past Solutions
 
@@ -151,7 +151,7 @@ This fails because of the **box-drawing `────` separators between items*
 - **Learnings & Past Solutions section** -- results from the `learnings-researcher` local prompt asset, with links to <root>/solutions/ files
 - **Agent-Native Gaps section** -- results from the `agent-native-reviewer` local prompt asset. Omit if no gaps found.
 - **Deployment Notes section** -- key checklist items from the `deployment-verification-agent` local prompt asset. Omit if the prompt did not run. Schema drift surfaces as `data-migration` findings — no separate section.
-- **Coverage section** -- suppressed count, removable surface (only when deletion-oriented maintainability findings exist; approximate net lines/files removable if applied -- a dead-weight signal, never a reduction target, omit otherwise), residual risks, testing gaps, failed reviewers
+- **Coverage section** -- suppressed count, validation outcome counts when Stage 5b ran (confirmed, rejected, unresolved, malformed, failed, shortcut-skipped) with the reason for each non-confirmed outcome, removable surface (only when deletion-oriented maintainability findings exist; approximate net lines/files removable if applied -- a dead-weight signal, never a reduction target, omit otherwise), residual risks, testing gaps, failed reviewers
 - **Summary uses blockquotes** for verdict, reasoning, and fix order
 - **Horizontal rule** (`---`) separates findings from verdict
 - **`###` headers** for each section -- never plain text headers
@@ -160,7 +160,7 @@ This fails because of the **box-drawing `────` separators between items*
 
 When `mode:agent` is active, **do not** emit the markdown table report above. Emit **one parseable JSON object** as the primary response and write the same payload to `review.json` under the resolved `<run-dir>`.
 
-The contract is defined in `references/finish-review.md` under **`### JSON output format (`mode:agent` only)`**. Minimum fields: `status`, `verdict`, `scope`, `intent`, `reviewers`, `findings`, `actionable_findings`, `artifact_path`, `run_id`.
+The contract is defined in `references/modes-and-output.md` under **`## JSON output format (`mode:agent` only)`**. Minimum fields: `status`, `verdict`, `scope`, `intent`, `reviewers`, `findings`, `actionable_findings`, `artifact_path`, `run_id`.
 
 Key differences from the human-facing markdown format:
 

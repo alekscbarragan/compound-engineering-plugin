@@ -64,7 +64,7 @@ If the options are already on the table and you need a verdict, use `ce-pov` ins
 
 ## Why not just ask the model for ideas?
 
-Because one "give me ideas" prompt returns plausible bullets with no grounding in the actual subject, drawn from the model's most-trained directions, ranked by nothing, with no record of what was considered and cut. `ce-ideate` separates grounding, generation, critique, and selection, and gets its quality from explicit rejection with reasons.
+Because one "give me ideas" prompt returns plausible bullets with no grounding in the actual subject. They come from the model's most-trained directions, ranked by nothing, with no record of what was considered and cut. `ce-ideate` separates grounding, generation, critique, and selection, and gets its quality from explicit rejection with reasons.
 
 - Grounding agents go first: codebase scan (in a repo), past learnings, web prior art, optional Slack and issue intelligence
 - The topic splits into 3-5 axes from that grounding: what to cover, separate from how to think
@@ -218,7 +218,7 @@ The file is written every run. Say `discard` to delete a file created this run. 
 | `go deep` | Maximum depth: every ideation agent on the top-tier model, doubled verification, a second critic |
 | `top issue themes in <area>` | Triggers issue-tracker intent |
 | `top 3` / `100 ideas` / `raise the bar` | Volume override: survivor count, raw total, or a higher bar |
-| `output:md` | Write the artifact as markdown instead of the default self-contained HTML (`output:html` forces HTML). Also settable per-project via `ideate_output` in CE config (`config.local.yaml` then `config.yaml`); see the [configuration reference](./configuration.md). Pipeline and `disable-model-invocation` runs force markdown. |
+| `output:md` | Write the artifact as markdown instead of the default self-contained HTML (`output:html` forces HTML). Also settable per-project via `ideate_output` in CE config (`config.local.yaml` then `config.yaml`); see the [configuration reference](./configuration.md). A headless or pipeline run resolves the format the same way; nothing forces markdown. |
 
 Skip phrases supported anywhere in the prompt: `no external research`, `no slack`.
 

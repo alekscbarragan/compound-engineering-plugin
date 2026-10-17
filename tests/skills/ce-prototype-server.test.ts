@@ -525,6 +525,7 @@ describe("ce-prototype light-webserver.js", () => {
       comment: "more padding above this heading",
       selector: "h1",
       textSnippet: "Pin me",
+      variant: ["dense", "compact"],
       rect: { x: 12, y: 8, width: 40, height: 20 },
     }
 
@@ -541,11 +542,12 @@ describe("ce-prototype light-webserver.js", () => {
     const payload = JSON.parse(result.stdout.trim())
     expect(Array.isArray(payload)).toBe(true)
     expect(payload).toHaveLength(1)
-    expect(Object.keys(payload[0])).toEqual(["id", "screen", "comment", "selector", "textSnippet", "rect"])
+    expect(Object.keys(payload[0])).toEqual(["id", "screen", "comment", "selector", "textSnippet", "variant", "rect", "point"])
     expect(payload[0].screen).toBe("001-screen.html")
     expect(payload[0].comment).toBe(record.comment)
     expect(payload[0].selector).toBe(record.selector)
     expect(payload[0].textSnippet).toBe(record.textSnippet)
+    expect(payload[0].variant).toEqual(record.variant)
     expect(payload[0].rect).toEqual(record.rect)
 
     const ending = runServerCommand(["wait", "--root", root])
@@ -600,7 +602,8 @@ describe("ce-prototype light-webserver.js", () => {
 
     expect((await post({ page: "/details.html" })).status).toBe(200)
     const details = await nextRecord()
-    expect(Object.keys(details)).toEqual(["id", "screen", "comment", "selector", "textSnippet", "rect"])
+    expect(details.variant).toBeNull()
+    expect(Object.keys(details)).toEqual(["id", "screen", "comment", "selector", "textSnippet", "variant", "rect", "point"])
     expect(details.screen).toBe("details.html")
     expect(details).not.toHaveProperty("page")
 
@@ -675,12 +678,13 @@ describe("ce-prototype light-webserver.js", () => {
     expect(note).toContain("CE local web")
 
     // A script fetching the same files gets them raw: a partial is not a screen.
-    for (const headers of [
+    const headerSets: Record<string, string>[] = [
       { "Sec-Fetch-Dest": "empty", "Sec-Fetch-Mode": "cors", Accept: "*/*" },
       { "Sec-Fetch-Dest": "iframe", "Sec-Fetch-Mode": "navigate", Accept: "text/html" },
       { Accept: "*/*" },
       {},
-    ]) {
+    ]
+    for (const headers of headerSets) {
       const raw = await fetch(`${origin}/pages/part.html`, { headers })
       expect(raw.headers.get("cache-control"), JSON.stringify(headers)).toBe("no-store")
       expect(await raw.text(), JSON.stringify(headers)).toBe("<h2>Part</h2>")
@@ -738,7 +742,7 @@ describe("ce-prototype light-webserver.js", () => {
 
     const waited = await runServerCommand(["wait", "--root", root])
     expect(waited.exitCode, waited.stderr).toBe(1)
-    expect(JSON.parse(waited.stdout.trim())).toEqual({ status: "session-ended" })
+    expect(JSON.parse(waited.stdout.trim())).toEqual({ status: "session-ended", reason: "user-ended" })
   })
 
   test("closing the last change stream ends the session after a reconnect grace", async () => {
@@ -753,7 +757,7 @@ describe("ce-prototype light-webserver.js", () => {
 
     const result = await runServerCommand(["wait", "--root", root])
     expect(result.exitCode, result.stderr).toBe(1)
-    expect(JSON.parse(result.stdout.trim()).status).toBe("session-ended")
+    expect(JSON.parse(result.stdout.trim())).toEqual({ status: "session-ended", reason: "tab-closed" })
   })
 
   test("a page load during the reconnect grace keeps the session live until the overlay reconnects", async () => {
@@ -961,7 +965,7 @@ describe("ce-prototype light-webserver.js", () => {
     const decoder = new TextDecoder()
     let text = ""
     const timedOut = Symbol("timed out")
-    let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | null = null
+    let pendingRead: ReturnType<typeof reader.read> | null = null
     const readUntil = async (predicate: () => boolean, ms: number) => {
       const deadline = Date.now() + ms
       while (Date.now() < deadline && !predicate()) {
@@ -1017,7 +1021,7 @@ describe("ce-prototype light-webserver.js", () => {
     const decoder = new TextDecoder()
     let text = ""
     const timedOut = Symbol("timed out")
-    let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | null = null
+    let pendingRead: ReturnType<typeof reader.read> | null = null
     const readUntil = async (predicate: () => boolean, ms: number) => {
       const deadline = Date.now() + ms
       while (Date.now() < deadline && !predicate()) {
@@ -1048,7 +1052,7 @@ describe("ce-prototype light-webserver.js", () => {
     expect(followUp.status).toBe(200)
     const followReader = followUp.body!.getReader()
     let followText = ""
-    let followPending: Promise<ReadableStreamReadResult<Uint8Array>> | null = null
+    let followPending: ReturnType<typeof followReader.read> | null = null
     const followUntil = async (predicate: () => boolean, ms: number) => {
       const deadline = Date.now() + ms
       while (Date.now() < deadline && !predicate()) {
@@ -1200,21 +1204,33 @@ describe("ce-prototype light-webserver.js", () => {
     expect(status.status).toBe("stopped")
   })
 
-  test("idle shutdown flushes a parked wait as session-ended", async () => {
+  test("a waiting agent keeps the session alive past the idle budget", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "ce-prototype-wait-idle-"))
     const info = await startServer(root, ["--annotate"], {
-      CE_LIGHT_WEB_IDLE_TIMEOUT_MS: "400",
+      CE_LIGHT_WEB_IDLE_TIMEOUT_MS: "1000",
       CE_LIGHT_WEB_LIFECYCLE_CHECK_MS: "30",
-      CE_LIGHT_WEB_WAIT_TIMEOUT_MS: "5000",
+      CE_LIGHT_WEB_WAIT_TIMEOUT_MS: "100",
     })
     const origin = `http://localhost:${info.port}`
-    // Root GET is activity, so idle is measured from a parked waiter rather
-    // than from listen() racing a separate Node `wait` process.
-    await fetch(String(info.url))
-    const parked = fetch(`${origin}/wait?token=${info.token}`)
-    const ended = await parked
-    expect(ended.status).toBe(410)
-    expect(await ended.json()).toEqual({ status: "session-ended" })
+    // Direct requests, as the wait CLI makes them: spawning the CLI under a
+    // loaded suite can outlast a short idle budget before it first connects.
+    const deadline = Date.now() + 2500
+    while (Date.now() < deadline) {
+      expect((await fetch(`${origin}/wait?token=${info.token}`)).status).toBe(204)
+    }
+    const status = JSON.parse((await runServerCommand(["status", "--root", root])).stdout.trim())
+    expect(status.status).toBe("running")
+  })
+
+  test("one parked wait outlasts an idle budget shorter than the wait timeout", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "ce-prototype-wait-long-"))
+    const info = await startServer(root, ["--annotate"], {
+      CE_LIGHT_WEB_IDLE_TIMEOUT_MS: "300",
+      CE_LIGHT_WEB_LIFECYCLE_CHECK_MS: "30",
+      CE_LIGHT_WEB_WAIT_TIMEOUT_MS: "1500",
+    })
+    const parked = await fetch(`http://localhost:${info.port}/wait?token=${info.token}`)
+    expect(parked.status).toBe(204)
   })
 
   test("stop flushes a parked wait as session-ended", async () => {
@@ -1222,13 +1238,46 @@ describe("ce-prototype light-webserver.js", () => {
     const info = await startServer(root, ["--annotate"], {
       CE_LIGHT_WEB_WAIT_TIMEOUT_MS: "8000",
     })
+    const origin = `http://localhost:${info.port}`
+    await fs.writeFile(path.join(String(info.screen_dir), "001-screen.html"), "<h1>Stop</h1>")
+    const { id } = await (await postAnnotation(origin, info.token, { comment: "served", selector: "h1" })).json()
+    expect((await flushAnnotations(origin, info.token)).status).toBe(200)
+    expect((await fetch(`${origin}/wait?token=${info.token}`)).status).toBe(200)
+
+    // /wait marks the served annotation done in the same tick it parks, so
+    // that SSE frame proves the CLI's request is parked before stop runs.
+    const controller = new AbortController()
+    const events = await fetch(eventsUrl(origin, info.token), { signal: controller.signal })
+    const reader = events.body!.getReader()
+    const decoder = new TextDecoder()
+    let text = ""
+    const latestState = () => {
+      const frames = [...text.matchAll(/event: annotations\ndata: (\{[^\n]*\})\n\n/g)]
+      return frames.length ? JSON.parse(frames.at(-1)![1])[id] : undefined
+    }
+    const readUntilState = async (state: string) => {
+      const deadline = Date.now() + 5000
+      while (latestState() !== state) {
+        const remaining = deadline - Date.now()
+        const chunk = remaining > 0
+          ? await Promise.race([reader.read(), Bun.sleep(remaining).then(() => null)])
+          : null
+        if (!chunk || chunk.done) {
+          throw new Error(`/events ended or timed out before annotation ${id} became ${state}. Received: ${text}`)
+        }
+        text += decoder.decode(chunk.value, { stream: true })
+      }
+    }
+    await readUntilState("working")
+
     const waiting = runServerCommand(["wait", "--root", root])
-    await fetch(String(info.url))
+    await readUntilState("done")
     const stopped = await runServerCommand(["stop", "--root", root])
+    controller.abort()
     expect(stopped.exitCode, stopped.stderr).toBe(0)
     const ended = await waiting
     expect(ended.exitCode, ended.stderr).toBe(1)
-    expect(JSON.parse(ended.stdout.trim()).status).toBe("session-ended")
+    expect(JSON.parse(ended.stdout.trim())).toEqual({ status: "session-ended", reason: "stopped" })
   })
 
   test("wait reports session-ended after idle already stopped the process", async () => {
@@ -1246,10 +1295,10 @@ describe("ce-prototype light-webserver.js", () => {
     expect(status.status).toBe("stopped")
     const ended = await runServerCommand(["wait", "--root", root])
     expect(ended.exitCode, ended.stderr).toBe(1)
-    expect(JSON.parse(ended.stdout.trim()).status).toBe("session-ended")
+    expect(JSON.parse(ended.stdout.trim())).toEqual({ status: "session-ended", reason: "idle" })
   })
 
-  test("annotation POST resets idle timeout while wait and /version do not", async () => {
+  test("annotation POST resets idle timeout while /version does not", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "ce-prototype-annotate-idle-"))
     const info = await startServer(root, ["--annotate"], {
       CE_LIGHT_WEB_IDLE_TIMEOUT_MS: "600",
@@ -1272,7 +1321,6 @@ describe("ce-prototype light-webserver.js", () => {
     while (Date.now() < deadline) {
       try {
         await fetch(`${origin}/version`)
-        await fetch(`${origin}/wait?token=${info.token}`)
       } catch {
         break
       }
@@ -1287,6 +1335,12 @@ describe("ce-prototype light-webserver.js", () => {
     expect(overlay).toContain("let commentToolOn = false")
     expect(overlay).toContain("ce-annotate-catcher")
     expect(overlay).toContain("elementsFromPoint")
+    // Hit testing alone cannot see a pointer-events:none label over a canvas.
+    expect(overlay).toContain('pointerEvents !== "none"')
+    // The pick is the topmost painted candidate from one hit test, never a per-candidate or by-area guess.
+    expect(overlay).toContain("while (top && !candidates.includes(top)) top = top.parentElement")
+    // A wrapper with a box and no pixels of its own at the click is not a target.
+    expect(overlay).toContain("visible && paintsAt(el, x, y)")
     expect(overlay).toContain("catcher.hidden = !on")
     const overlayCss = await fs.readFile(path.join(import.meta.dir, "..", "..", "skills", "ce-prototype", "assets", "annotate.css"), "utf8")
     expect(overlayCss).toContain("cursor: crosshair")
@@ -1333,16 +1387,35 @@ describe("ce-prototype light-webserver.js", () => {
     expect(overlay).toContain("Could not send to agent — retry")
     expect(overlay).toContain("Could not end session — retry")
     expect(overlay).toContain('pin.status === "pending" || pin.status === "working"')
+    // An applied note's pin leaves the page.
+    expect(overlay).toContain('if (annotationStates[pins[i].id] === "done") pins.splice(i, 1)')
+    // Pins never take the click meant for the control under them; the comment shows by pointer position.
+    expect(overlayCss).toMatch(/\.ce-annotate-pin \{[^}]*pointer-events: none;/)
+    expect(overlay).toContain("showPinTipAt(event.clientX, event.clientY)")
     expect(overlay).toContain('addEventListener("scroll", reattachPins')
     expect(overlay).toContain("new ResizeObserver(reattachPins)")
     expect(overlay).toContain("new MutationObserver(reattachPins)")
     expect(overlay).toContain("EventSource.CLOSED")
+    // A manual reload or link navigation aborts the stream before pagehide;
+    // treating that as session end persisted an ended session into the next page.
+    expect(overlay).toContain("source.readyState === EventSource.CLOSED && !leavingPage")
     // Every screen change reloads the document with the pins carried across;
     // the overlay never reconciles DOM, head, or scripts itself.
     expect(overlay).toContain('addEventListener("screen-changed"')
     expect(overlay).toContain("sessionStorage.setItem(STATE_KEY")
     expect(overlay).toContain('addEventListener("pagehide"')
     expect(overlay).toContain("pinOnThisPage")
+    // Tabbed variants on one screen: a pin shows only while its target is
+    // rendered and inside the data-ce-variant it was placed on; the Send to
+    // agent count still covers every pin.
+    expect(overlay).toContain('closest?.("[data-ce-variant]")')
+    // Nested controls: the pin's variant is the full chain of enclosing
+    // markers, kept as a list so no name can collide with a delimiter.
+    expect(overlay).toContain("return names.length ? names : null")
+    // A restored draft reattaches under the same condition a pin shows under.
+    expect(overlay).toContain("if (node && !pinOffView(node, draft))")
+    expect(overlay).toContain("pinOffView(node, pin)")
+    expect(overlay).toContain("variant: draft.variant")
     expect(overlay).toContain("event.persisted")
     expect(overlay).not.toContain("sessionStorage.removeItem")
     expect(overlay).toContain("window.location.replace(`${servedPage}${window.location.search}${window.location.hash}`)")
@@ -1350,7 +1423,7 @@ describe("ce-prototype light-webserver.js", () => {
     // Pin status follows the helper's annotation lifecycle, never a reload;
     // an open draft survives a reload; a reload waits for an in-flight POST.
     expect(overlay).toContain('addEventListener("annotations"')
-    expect(overlay).toContain('{ held: "pending", queued: "pending", working: "working", done: "attached" }')
+    expect(overlay).toContain('{ held: "pending", queued: "pending", working: "working" }')
     expect(overlay).not.toContain("advancePinsAfterRevision")
     expect(overlay).toMatch(/draft: draft\n\s+\? \{ \.\.\.draft, page: servedPage, text: commentField\.value/)
     expect(overlay).toMatch(/if \(inFlight\) \{\n\s+reloadPending = true/)

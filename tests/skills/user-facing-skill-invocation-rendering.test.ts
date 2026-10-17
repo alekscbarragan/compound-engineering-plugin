@@ -10,13 +10,13 @@ const modelVisibleRendererCases = [
   {
     // The pre-DONE handoff lines that print these invocations moved into lfg's
     // close-out reference.
-    file: "skills/lfg/references/shipping-tail.md",
+    file: "skills/lfg/references/shipping.md",
     defaults: ["/ce-explain <name>", "/ce-babysit-pr <pr-url>"],
     codex: ["$ce-explain <name>", "$ce-babysit-pr <pr-url>"],
     unnecessaryOmp: ["/skill:ce-explain <name>", "/skill:ce-babysit-pr <pr-url>"],
   },
   {
-    file: "skills/ce-babysit-pr/SKILL.md",
+    file: "skills/ce-babysit-pr/references/setup.md",
     defaults: ["/ce-babysit-pr <url>"],
     codex: ["$ce-babysit-pr <url>"],
     unnecessaryOmp: ["/skill:ce-babysit-pr <url>"],
@@ -85,15 +85,6 @@ const modelVisibleRendererCases = [
 
 const explicitOnlyRendererCases = [
   {
-    // The rendering rule travels with the seam that prints the invocation: the
-    // ce-polish handoff now lives in the Phase 6 required-read reference.
-    file: "skills/ce-explain/references/destinations.md",
-    defaults: ["/ce-polish"],
-    codex: ["$ce-polish"],
-    omp: ["/skill:ce-polish"],
-    targets: ["ce-polish"],
-  },
-  {
     file: "skills/ce-setup/SKILL.md",
     defaults: ["/ce-setup"],
     codex: ["$ce-setup"],
@@ -117,7 +108,7 @@ const explicitOnlyRendererCases = [
 ] as const
 
 describe("user-facing skill invocation rendering", () => {
-  test.each(modelVisibleRendererCases)(
+  test.each([...modelVisibleRendererCases])(
     "$file keeps model-visible handoffs host-neutral",
     ({ file, defaults, codex, unnecessaryOmp }) => {
       const body = readRepoFile(file)
@@ -132,7 +123,7 @@ describe("user-facing skill invocation rendering", () => {
     },
   )
 
-  test.each(explicitOnlyRendererCases)(
+  test.each([...explicitOnlyRendererCases])(
     "$file uses deterministic OMP syntax for explicit-only skill targets",
     ({ file, defaults, codex, omp, targets }) => {
       const body = readRepoFile(file)
@@ -198,9 +189,8 @@ describe("user-facing skill invocation rendering", () => {
     expect(usageGuide).not.toContain("Use /ce-optimize")
   })
 
-  test("Codex goal remains a built-in exception, not a converted skill invocation", () => {
+  test("the built-in /goal command is never rendered as a converted skill invocation", () => {
     const planHandoff = readRepoFile("skills/ce-plan/references/plan-handoff.md")
-    expect(planHandoff).toContain("Run it as a `/goal`")
     expect(planHandoff).not.toContain("$goal")
   })
 })

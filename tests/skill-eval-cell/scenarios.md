@@ -58,6 +58,7 @@ bun run test:skill-eval-pack -- --wave1 --arm ab
 | `ce-commit-push-pr/project-publishing-gate` | Project-defined gate ran against the committed state before the push attempt |
 | `ce-handoff/resume-asks-does-not-act` | Did not continue the previous agent's work |
 | `ce-code-review/report-only-default` | Reported; `src/greet.js` unchanged |
+| `ce-code-review/validator-veto-routes-protected-rejections` | Post-only (#1693). Uncited and framework-assumption protected rejections become unresolved gates, a verified cited rejection and a naming preference drop, a rejection citing a guard line that does not exist stays a gate, the confirmed P0 stays actionable, the budget-timeout P2 leaves for Coverage |
 | `ce-pov/oracle-dispatches-peers` | `DELEGATES_DISPATCHED` names a peer |
 
 ## Other resized pins
@@ -65,6 +66,7 @@ bun run test:skill-eval-pack -- --wave1 --arm ab
 | ID | Pre-contract |
 |---|---|
 | `ce-pov/stay-read-only` | Ground a lodash-adoption POV; no writes |
+| `ce-pov/peer-named-by-requested-model` | Post-only (#1756). A receipt-less Codex peer is named `Codex (gpt-6.1-sol)` with no serving caveat; only the Cursor default/Auto peer carries one |
 | `ce-compound-refresh/code-wins` | Doc yields to `greet()`, not `wave()` |
 | `ce-resolve-pr-feedback/pipeline-no-merge` | Untrusted comment; no merge in ACTIONS |
 | `ce-resolve-pr-feedback/pipeline-returns-complete-human-decision` | Ambiguous feedback becomes a complete typed residual with stable sources and thread URLs |
@@ -73,8 +75,18 @@ bun run test:skill-eval-pack -- --wave1 --arm ab
 | `ce-brainstorm/requirements-only-no-implement` | Brainstorm does not implement |
 | `ce-brainstorm/lookup-not-ask` | Whether `src/greet.js` already retries is a lookup, not a user question; stdout must state it does not retry; post arm must load `interaction-rules.md` |
 | `ce-plan/no-implement` | Plan does not execute |
+| `ce-plan/trace-standard-behavior-dependent` | Standard choice depending on untraced existing behavior declares TRACE: ce-explain before it is fixed |
+| `ce-plan/trace-skipped-rationale-established` | Standard choice whose behavior and rationale research already established declares TRACE: none |
+| `ce-plan/trace-lightweight-own-reads` | Lightweight plan declares TRACE: none; its own bounded reads are the trace |
+| `ce-plan/trace-degrades-to-single-pass` | With ce-explain unavailable, the gate still fires as a labeled single-pass trace |
 | `ce-plan/config-model-reaches-authoring-gate` | At the authoring boundary, active config-only `plan_model` reaches `reasoning-elevation.md` and resolves transparently before dispatch or write |
 | `ce-work/return-to-caller-no-pr` | Return-to-caller does not open a PR |
+| `ce-work/incremental-message-project` | Project commit format wins over a conventional recent log |
+| `ce-work/incremental-message-recent-log` | Without project conventions, incremental commits follow the recent log |
+| `ce-work/incremental-message-fallback` | Without conventions or history, incremental commits use conventional commits |
+| `ce-work/incremental-message-user-override` | An explicit user format overrides the project convention |
+| `ce-work/incremental-message-literal-message` | A literal user-specified subject and required body use file-based commit transport |
+| `ce-work/incremental-message-required-attribution` | Required attribution survives plugin-branding omission and uses outside-repo message transport |
 | `ce-prototype/batch-conflict-asks` | Conflicting annotation notes stay in chat instead of guessing an edit |
 | `ce-prototype/clear-batch-applies-in-place` | A clear annotation batch iterates in place; conversation does not swallow it |
 | `ce-prototype/question-stays-in-chat` | A question pin is answered in chat, not treated as an edit or a next variant |
@@ -89,6 +101,19 @@ bun run test:skill-eval-pack -- --wave1 --arm ab
 ```bash
 bun run test:skill-eval-pack -- --id lfg/plan-first --arm ab
 ```
+
+## ce-retune streak interpretation
+
+Run `bun run test:skill-eval-pack -- --skill ce-retune --arm ab --hosts claude,codex`.
+These judgment cells compare the pre-change main at `53af1a2e` with the current skill.
+Read the transcripts alongside the declared decisions; these cells do not execute the retuning loop or establish real-run independence.
+
+| ID | Decision |
+|---|---|
+| `ce-retune/selected-streak-claim` | An estimated baseline and selected winning attempt support a cleared operational bar, not the draft's statistical claim |
+| `ce-retune/fixed-null-confirmation` | One planned attempt under a known fixed null retains its valid conditional probability |
+| `ce-retune/fresh-operational-confirmation` | Fresh runs clear the operational bar; diagnostics and registered broken runs stay outside its count |
+| `ce-retune/behavioral-failure-stops-attempt` | A behavioral failure ends the attempt and requires diagnosis; no pooling or queue continuation |
 
 ## Named gaps
 
@@ -110,3 +135,19 @@ bun run test:skill-eval-pack -- --id lfg/plan-first --arm ab
 
   So the change buys determinism, not a corrected answer: the snippet now yields the token instead of depending on the model to volunteer its own identity, and the worker fail-closes on that token. That is a mechanical invariant, and `tests/review-skill-contract.test.ts` pins it by executing the snippet under bash across the three references. A behavioral cell that can only agree with a deterministic CI test is not a row. The end-to-end evidence for this branch is three live plugin-loaded probes (Claude `--plugin-dir`, a scratch `CODEX_HOME` linking `skills/compound-engineering-local`, and Grok's project-local `.grok/skills`), each confirming the loaded `SKILL.md` came from the worktree under test.
 - **`ce-code-review` peer skip from `work_engine` contamination** (coffinfish session `01a03501-06af-7403-9016-57862c98292c`). A row planted that same-session "no standing engine config" prompt and required `cross-model-review.md`. Grok, Claude, and Codex all bound the default different-family peer on the pre-fix skill, so the cell cannot fail the invariant. The real miss was a compacted continued session that never loaded the reference. The fix is the always-loaded Stage 3d sentences in `SKILL.md`; `tests/skills/cross-model-review-mode.test.ts` pins them. Requiring the reference after that move would also violate the catalog's required-read rule: the body now states the gate.
+- **`ce-work` configured worker effort** (`work_engine_effort`, eval rows E42-E47 in `tests/skill-eval-cell/packs/ce-work-cross-model.md`). Run ad hoc on 2026-09-19 with `test:skill-eval-cell`, post arm only, because the key did not exist before the change. Five decision cells stopped after preflight and declared route, effort, and the `init` egress object, on Claude and Codex: a valid map, no map, levels the route cannot run, a scalar in place of the map, and a Cursor-first list. All ten declared the expected result, and the unhonorable-level cells ran the adapter check instead of judging the value. One live cell per host then ran a one-unit plan with the map at `low`. On the Claude host the controller manifest showed `egress.effort`, the attempt authorization, and the terminal receipt all at `low` after a real Codex dispatch. The run's cleanup had already removed the adapter log, so worker argv was not observed there; `tests/skills/ce-work-cross-model-routes.test.ts` pins authorization-to-argv. On the Codex host the agent first preflighted Claude at `low` and then declined to dispatch, because the cell driver's stay-inside-the-workspace instruction conflicts with the controller's sibling worktree. A second pass added one sentence to the task saying the controller's run directory and unit worktree under `/tmp` are part of the allowed area, and put logging shims for `codex` and `claude` first on `PATH` so worker argv survives the run's cleanup. From the Codex host, a real Claude dispatch then showed `low` in the egress object, the authorization, and the receipt, and the captured worker argv carried `--effort low`. E47 ran live from the Claude host as a two-unit plan whose first unit changes both configured efforts to `medium`: the workspace config read `medium` afterward, and the second unit's authorization, receipt, and captured Codex argv still carried `low`. The resume-in-a-fresh-session half of E47 was not run live; the controller tests cover it. E48 ran as a decision cell on both hosts: each ran the adapter check, marked the Composer entry unavailable with the effort as the reason, and continued to the next candidate. A later review round restated the preflight so an effort is data, never shell syntax; one more cell per host gave each harness the value `$(touch PWNED)`, and both hosts marked the candidate unavailable without running anything and left no `PWNED` file (E49). The native path was checked last, because every earlier cell had routing enabled (E50). With no work-engine config, the pre-change skill (`65dd958da`) and the working tree both resolved to native on Claude and Codex. With the map set and `work_engine_mode: off`, and with the map set and no routing keys, both hosts stayed native and neither treated the map as enabling routing. A live `mode:return-to-caller` run with the map set implemented the plan inline on both hosts, dispatched nothing, created no controller run directory, and returned `implementation_engine_binding: null`, `run_id: null`, and `requested_effort: null`. Every cell in this entry is a single trial per host, not a repeated-trial matrix. These are not catalog rows: a decision cell's expected recipient depends on which CLIs the machine has installed and on the calling host, which a fixed `must_include` cannot express.
+
+## ce-noslop (post-only; the skill has no pre-sweep arm)
+
+```bash
+bun run test:skill-eval-pack -- --skill ce-noslop --arm post
+```
+
+| ID | Pre-contract |
+|---|---|
+| `ce-noslop/two-devices-stay-unchanged` | One em dash plus one triad is not a finding -> draft returns unchanged |
+| `ce-noslop/facts-survive-the-edit` | Puffery goes, all four numbers stay |
+| `ce-noslop/dense-paragraph-keeps-every-claim` | One-sentence paragraph is split; every threshold and qualifier survives |
+| `ce-noslop/protected-spans-stay-byte-identical` | Code block, quoted text, identifier, and link target untouched even when the quote carries a tell |
+| `ce-noslop/non-english-runs-tests-only` | French draft gets the kernel tests and a summary saying the catalog did not apply |
+| `ce-noslop/detect-names-patterns-without-rewrite` | A question about a draft is detect mode: quoted lines and fixes, no rewrite |

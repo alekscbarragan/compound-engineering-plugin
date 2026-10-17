@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process"
 import { chmodSync, existsSync, mkdtempSync, writeFileSync, readFileSync, renameSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { isLostChildExit, throwLostChildExit } from "./helpers/lost-child-exit"
 
 setDefaultTimeout(30_000)
 
@@ -16,10 +17,10 @@ const EXPIRING_TEST_INVOCATION = ["--start-invocation", "--invocation-budget-sec
 
 function fetchFile(dir: string, name: string, obj: unknown): string {
   const p = path.join(dir, name)
-  const fixture = obj && typeof obj === "object" && !Array.isArray(obj)
+  const fixture: unknown = obj && typeof obj === "object" && !Array.isArray(obj)
     ? { ...(obj as Record<string, unknown>) }
     : obj
-  if (fixture && typeof fixture === "object" && Array.isArray(fixture.threads)) {
+  if (fixture && typeof fixture === "object" && "threads" in fixture && Array.isArray(fixture.threads)) {
     fixture.threads = fixture.threads.map((thread: any) => ({
       ...thread,
       url: thread.url ?? `https://example.test/thread/${thread.thread_id}`,
@@ -169,6 +170,7 @@ function watch(stateDir: string, fetch: string, extra: string[] = []): any {
       "--interval", "0.1", ...invocationArgs, ...extra],
     { encoding: "utf8", timeout: 5000 },
   )
+  if (isLostChildExit(r)) throwLostChildExit(["python3", SCRIPT, "watch"])
   expect(r.status, r.stderr).toBe(0)
   return JSON.parse(r.stdout.trim().split("\n").pop()!) // the wake sentinel is the final line
 }
@@ -1690,7 +1692,7 @@ print(json.dumps({"current": current, "same_head_mixed_case": same_head_mixed_ca
     const r = spawnSync("python3", ["-c", python], { encoding: "utf8" })
     expect(r.status, r.stderr).toBe(0)
     const result = JSON.parse(r.stdout)
-    expect(result.calls[0].join(" ")).toContain("baseRefOid")
+    expect(result.calls[0].join(" ")).not.toContain("baseRefOid")
     const refCalls = result.calls.filter((call: string[]) => call.includes("repos/o/r/git/ref/heads/main"))
     expect(refCalls).toHaveLength(5)
     for (const call of refCalls) {
@@ -1702,6 +1704,7 @@ print(json.dumps({"current": current, "same_head_mixed_case": same_head_mixed_ca
     for (const call of identityCalls) {
       expect(call).toContain("--hostname")
       expect(call).toContain("ghe.acme.test")
+      expect(call.join(" ")).toContain("baseRefOid")
     }
     expect(result.current.base).toEqual({
       host: "ghe.acme.test",
@@ -1810,6 +1813,94 @@ print(json.dumps(m.fetch(7, "o/r")["checks"][0]))
       started_at: null,
       completed_at: null,
     })
+  })
+
+  test("live fetch normalizes an impossible CheckRun status only with same-head parent corroboration", () => {
+    const python = `
+import json
+from importlib.machinery import SourceFileLoader
+
+m = SourceFileLoader("prs_terminal_check", ${JSON.stringify(SCRIPT)}).load_module()
+head = "a" * 40
+cases = {
+  "corroborated": {},
+  "workflow-head-mismatch": {"workflow_head": "b" * 40},
+  "suite-conclusion-mismatch": {"suite_conclusion": "failure"},
+  "check-head-mismatch": {"check_head": "c" * 40},
+  "job-id-mismatch": {"database_id": 124},
+  "job-record-mismatch": {"job_id": 124},
+  "queued-with-terminal-fields": {"graphql_status": "QUEUED"},
+}
+
+class Result:
+    pass
+
+def run_case(overrides):
+    calls = []
+    def checked(cmd, label):
+        result = Result()
+        result.returncode = 0
+        result.stderr = ""
+        result.stdout = json.dumps({
+            "state": "OPEN", "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN",
+            "reviewDecision": None, "headRefOid": head, "baseRefOid": "b" * 40,
+            "baseRefName": "main", "headRefName": "feature", "number": 7,
+            "url": "https://github.com/o/r/pull/7", "author": {"login": "author"},
+            "comments": [], "reviews": [],
+            "statusCheckRollup": [{"__typename": "CheckRun", "databaseId": overrides.get("database_id", 123),
+                "workflowName": "CI", "name": "unit", "status": overrides.get("graphql_status", "IN_PROGRESS"),
+                "conclusion": "SUCCESS", "completedAt": "2026-09-18T20:30:31Z",
+                "startedAt": "2026-09-18T20:00:00Z",
+                "detailsUrl": "https://github.com/o/r/actions/runs/456/job/123"}],
+        })
+        return result
+    def run(cmd):
+        calls.append(cmd)
+        result = Result()
+        result.returncode = 0
+        result.stderr = ""
+        route = cmd[-1]
+        if route.endswith("check-runs/123"):
+            payload = {"head_sha": overrides.get("check_head", head), "conclusion": "success",
+                       "completed_at": "2026-09-18T20:30:31Z", "check_suite": {"id": 789}}
+        elif route.endswith("actions/jobs/123"):
+            payload = {"id": overrides.get("job_id", 123), "head_sha": head,
+                       "conclusion": "success", "completed_at": "2026-09-18T20:30:31Z"}
+        elif route.endswith("check-suites/789"):
+            payload = {"head_sha": head, "status": "completed",
+                       "conclusion": overrides.get("suite_conclusion", "success")}
+        elif route.endswith("actions/runs/456"):
+            payload = {"head_sha": overrides.get("workflow_head", head), "status": "completed",
+                       "conclusion": overrides.get("workflow_conclusion", "success")}
+        else:
+            raise AssertionError("unexpected command: " + repr(cmd))
+        result.stdout = json.dumps(payload)
+        return result
+    m._run_checked = checked
+    m._run = run
+    m.fetch_pr_merge_identity = lambda *args: None
+    m.fetch_base_ref = lambda *args: {"identity": "current", "oid": "b" * 40}
+    m.fetch_eyes_reactors = lambda *args: []
+    m.fetch_threads = lambda *args: []
+    m.fetch_awaiting_approval = lambda *args: 0
+    m.fetch_pr_chain = lambda *args: {"manager_status": "absent", "relationship_status": "independent",
+                                      "default_branch": "main", "parent_prs": [], "dependent_prs": []}
+    return {"check": m.fetch(7, "o/r")["checks"][0], "calls": calls}
+
+print(json.dumps({name: run_case(overrides) for name, overrides in cases.items()}))
+`
+    const result = spawnSync("python3", ["-c", python], { encoding: "utf8" })
+    expect(result.status, result.stderr).toBe(0)
+    const cases = JSON.parse(result.stdout)
+    expect(cases.corroborated.check.status).toBe("COMPLETED")
+    expect(cases.corroborated.check.conclusion).toBe("SUCCESS")
+    expect(cases.corroborated.calls.map((call: string[]) => call.at(-1))).toEqual([
+      "repos/o/r/check-runs/123", "repos/o/r/actions/jobs/123", "repos/o/r/check-suites/789", "repos/o/r/actions/runs/456",
+    ])
+    for (const name of ["workflow-head-mismatch", "suite-conclusion-mismatch", "check-head-mismatch", "job-id-mismatch", "job-record-mismatch"]) {
+      expect(cases[name].check.status, name).toBe("IN_PROGRESS")
+    }
+    expect(cases["queued-with-terminal-fields"].check.status).toBe("QUEUED")
   })
 
   test("base-ref freshness blocks readiness, resets quiet on current-to-stale, and fails closed on probe error", () => {
@@ -4051,6 +4142,7 @@ m.cmd_snapshot(args)
         "--invocation-budget-seconds", String(incumbent.invocation_budget_seconds)],
       { encoding: "utf8", timeout: 5000 },
     )
+    if (isLostChildExit(r)) throwLostChildExit(["python3", SCRIPT, "watch", "stopped-before-arm"])
 
     expect(r.status, r.stderr).toBe(0)
     expect(JSON.parse(r.stdout.trim())).toMatchObject({
@@ -4341,21 +4433,33 @@ print(json.dumps(signals))
     expect(JSON.parse(r.stdout)).toEqual([[125, 15]])
   })
 
+  // subprocess.run kills and reaps its child only for an exception raised inside
+  // communicate(). A takeover keyed on "the child exists" can land after fork but
+  // before run() reaches that call -- observed on a loaded CI runner -- and the
+  // _WatchSuperseded it raises there orphans the child, which then holds this
+  // test's stdout pipe open for the full spawnSync timeout. Fire the takeover
+  // from inside communicate() instead, so it can only land in the reaping region.
   test("watch: takeover interrupts and reaps an active fetch subprocess", () => {
-    const childPid = path.join(dir, "watch-fetch-child.pid")
     const python = `
-import os, signal, subprocess, threading, time
+import os, signal, subprocess, sys, threading, time
 from importlib.machinery import SourceFileLoader
 from types import SimpleNamespace
 m = SourceFileLoader("prs", ${JSON.stringify(SCRIPT)}).load_module()
-pid_file = ${JSON.stringify(childPid)}
+child = {}
+fetch_waiting = threading.Event()
+real_communicate = subprocess.Popen.communicate
+def communicate_and_announce(self, *args, **kwargs):
+    child["pid"] = self.pid
+    fetch_waiting.set()
+    return real_communicate(self, *args, **kwargs)
+subprocess.Popen.communicate = communicate_and_announce
 def fake_snapshot(args, now, advance_trajectory=True, watch_generation=None):
-    subprocess.run(["sh", "-c", "echo $$ > " + pid_file + "; exec sleep 30"], check=True)
+    subprocess.run(["sleep", "30"], check=True)
     return {"counts": {}, "pr_state": "OPEN", "session_seconds": 0}
-def stop_when_child_starts():
-    deadline = time.time() + 5
-    while time.time() < deadline and not os.path.exists(pid_file):
-        time.sleep(0.01)
+def stop_when_fetch_waits():
+    if not fetch_waiting.wait(5):
+        sys.stderr.write("fetch never reached communicate()\\n")
+        os._exit(3)
     os.kill(os.getpid(), signal.SIGTERM)
 m._run_snapshot = fake_snapshot
 m._fetch_snapshot = lambda args: {}
@@ -4366,20 +4470,20 @@ m._activate_watch = lambda args, generation, now, cur: (
 m._terminate_replaced_watch = lambda previous: None
 m._watch_is_current = lambda args, generation: True
 m._wake_reason = lambda actionable, settle_seconds, *_: None
-threading.Thread(target=stop_when_child_starts, daemon=True).start()
+threading.Thread(target=stop_when_fetch_waits, daemon=True).start()
 args = SimpleNamespace(reset_session=False, stop_file=None, settle_seconds=300, max_runtime=0,
                        interval=0.01, state_dir=${JSON.stringify(dir)}, pr=1, repo="o/r")
 started = time.time()
 m.cmd_watch(args)
-pid = int(open(pid_file).read())
 alive = True
 try:
-    os.kill(pid, 0)
+    os.kill(child["pid"], 0)  # succeeds for a running child and for an unreaped zombie
 except ProcessLookupError:
     alive = False
 print(f"{alive} {time.time() - started:.3f}")
 `
     const r = spawnSync("python3", ["-c", python], { encoding: "utf8", timeout: 5000 })
+    if (isLostChildExit(r)) throwLostChildExit(["python3", "-c", "cmd_watch takeover reap"])
     expect(r.status, r.stderr).toBe(0)
     const [alive, elapsed] = r.stdout.trim().split(" ")
     expect(alive).toBe("False")
@@ -4437,6 +4541,7 @@ m.cmd_watch(args)
 print(json.dumps({"ordinary_restored": signal.getsignal(signal.SIGTERM) is caller_handler}))
 `
     const r = spawnSync("python3", ["-c", python], { encoding: "utf8", timeout: 5000 })
+    if (isLostChildExit(r)) throwLostChildExit(["python3", "-c", "cmd_watch stale teardown"])
     expect(r.status, r.stderr).toBe(0)
     expect(JSON.parse(r.stdout)).toEqual({ ordinary_restored: true })
   })

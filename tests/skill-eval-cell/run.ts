@@ -10,9 +10,11 @@ import { spawn, spawnSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
 import { arg, flag } from "./cli"
-import { WORKTREE_REF, extractSkill, mintCellDir } from "./extract"
+import { REPO_ROOT, WORKTREE_REF, extractSkill, mintCellDir } from "./extract"
+import { CONVERSE_HOSTS, codexAgentText, formatTranscript, hostTurnArgv, runUserSim, type ConversationEnd, type Turn } from "./converse"
 import { HOSTS, planHost, resolveRunHosts, wrapPrompt, type Host, type HostPlan } from "./hosts"
 import { installPathShims, type PathShim } from "./path-shim"
+import { fingerprint, prepareOutput, sealEvidence, sha256, writeJSON } from "./provenance"
 
 function parseHosts(): Host[] | undefined {
   const raw = arg("--hosts")
@@ -85,11 +87,9 @@ process.on("exit", () => {
   for (const pid of liveHosts) killGroup(pid)
 })
 
-async function runPlan(
-  plan: HostPlan,
-  cwd: string,
-  timeoutMs: number,
-): Promise<{ exitCode: number | null; stdout: string; stderr: string; timedOut: boolean }> {
+type RunResult = { exitCode: number | null; stdout: string; stderr: string; timedOut: boolean }
+
+async function runPlan(plan: HostPlan, cwd: string, timeoutMs: number): Promise<RunResult> {
   return new Promise((resolve) => {
     const stdin = fs.openSync("/dev/null", "r")
     // detached makes the child a process-group leader so a timeout can take down
@@ -113,10 +113,11 @@ async function runPlan(
     }
     let stdout = ""
     let stderr = ""
-    child.stdout.on("data", (c) => {
+    // Both output streams are explicitly piped above; numeric stdin prevents overload narrowing.
+    child.stdout!.on("data", (c) => {
       stdout += c.toString()
     })
-    child.stderr.on("data", (c) => {
+    child.stderr!.on("data", (c) => {
       stderr += c.toString()
     })
     let backstop: ReturnType<typeof setTimeout> | undefined
@@ -151,13 +152,67 @@ async function runPlan(
   })
 }
 
+async function converse(
+  host: Host, plan: HostPlan, cwd: string, hostDir: string,
+  opts: { prompt: string; persona: string; timeoutMs: number; maxTurns: number },
+): Promise<RunResult & { turns: number; ended: ConversationEnd; argvs: string[][] }> {
+  const sessionId = crypto.randomUUID()
+  const deadline = Date.now() + opts.timeoutMs
+  const turns: Turn[] = []
+  const log = path.join(hostDir, "transcript.jsonl")
+  let message = opts.prompt
+  const argvs: string[][] = []
+  let stderr = ""
+  let last: RunResult = { exitCode: null, stdout: "", stderr: "", timedOut: false }
+  let ended: ConversationEnd = "max-turns"
+  // The wrapped prompt asks for trailers on every reply, so the simulated user,
+  // not the trailers, decides when the conversation is over.
+  for (let i = 0; i < opts.maxTurns; i++) {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) { ended = "timeout"; last.timedOut = true; break }
+    const argv = hostTurnArgv(host, { first: i === 0, sessionId, message, cwd })
+    argvs.push(argv)
+    last = await runPlan({ ...plan, argv }, cwd, remaining)
+    stderr += last.stderr
+    // Codex's stdout is its event stream here; the tool calls it holds stay in the
+    // cell's stderr.txt, out of the graded transcript.
+    if (host === "codex") stderr += last.stdout
+    const agentText = (host === "codex" ? codexAgentText(last.stdout) : last.stdout).trim()
+    turns.push({ role: "agent", text: agentText })
+    fs.appendFileSync(log, `${JSON.stringify({ role: "agent", text: agentText, exitCode: last.exitCode })}\n`)
+    if (last.timedOut) { ended = "timeout"; break }
+    if (last.exitCode !== 0) { ended = "host-error"; break }
+    const sim = runUserSim(opts.persona, turns, plan.env, deadline - Date.now())
+    if (sim.timedOut) { ended = "timeout"; last.timedOut = true; break }
+    if (sim.failed) {
+      // An unanswered question is not usable evidence, so the cell must not read as completed.
+      ended = "user-sim-error"
+      last.exitCode = last.exitCode === 0 ? 1 : last.exitCode
+      stderr += `\nsimulated user failed: ${sim.error}\n`
+      break
+    }
+    if (sim.reply === null) { ended = "user-done"; break }
+    const reply = sim.reply
+    turns.push({ role: "user", text: reply })
+    fs.appendFileSync(log, `${JSON.stringify({ role: "user", text: reply })}\n`)
+    message = reply
+  }
+  if (ended === "max-turns") {
+    // The cap cut off an exchange in progress, so the transcript is not a finished conversation.
+    last.exitCode = last.exitCode === 0 ? 1 : last.exitCode
+    stderr += `\nconversation stopped at --max-turns ${opts.maxTurns} with a reply unsent\n`
+  }
+  const stdout = formatTranscript(turns, "USER")
+  return { ...last, stdout, stderr, turns: turns.filter((t) => t.role === "agent").length, ended, argvs }
+}
+
 async function main() {
   const skill = arg("--skill")
   const task = arg("--task")
   const taskFile = arg("--task-file")
   if (!skill) {
     console.error(
-      "usage: bun run test:skill-eval-cell -- --skill <name> --task \"...\" [--task-file p] [--ref WORKTREE|<git-ref>] [--hosts claude,codex,grok] [--fixture dir] [--out dir] [--timeout-secs 600] [--read-only] [--git-init] [--git-untracked p,p] [--git-staged p,p] [--shim-git-push] [--shim-gh-pr]\n       default --hosts is the other two harnesses from this session; missing CLIs warn and continue",
+      "usage: bun run test:skill-eval-cell -- --skill <name> --task \"...\" [--task-file p] [--ref WORKTREE|<git-ref>] [--hosts claude,codex,grok] [--fixture dir] [--out dir] [--timeout-secs 600] [--with-skill name,name] [--persona file --max-turns 20 (claude, codex)] [--reasoning-effort level (grok)] [--read-only] [--git-init] [--git-untracked p,p] [--git-staged p,p] [--shim-git-push] [--shim-gh-pr]\n       default --hosts is the other two harnesses from this session; missing CLIs warn and continue",
     )
     process.exit(2)
   }
@@ -169,23 +224,46 @@ async function main() {
 
   const ref = arg("--ref", WORKTREE_REF) ?? WORKTREE_REF
   const timeoutMs = Number(arg("--timeout-secs", "600")) * 1000
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("--timeout-secs must be positive and finite")
   const readOnly = flag("--read-only")
   const resolution = resolveRunHosts({ explicit: parseHosts() })
   for (const line of resolution.warnings) console.error(line)
   const hosts = resolution.run
+  const personaFile = arg("--persona")
+  const personaText = personaFile ? fs.readFileSync(personaFile, "utf8") : null
+  const maxTurns = Number(arg("--max-turns", "20"))
+  if (personaText !== null) {
+    const unsupported = hosts.filter((h) => !CONVERSE_HOSTS.includes(h))
+    if (unsupported.length > 0 || readOnly) {
+      console.error(`--persona runs only on ${CONVERSE_HOSTS.join(", ")} and not with --read-only`)
+      process.exit(2)
+    }
+    // The simulated user is a claude call even when the host under test is codex.
+    if (!Bun.which("claude")) {
+      console.error("--persona needs the claude CLI on PATH for the simulated user")
+      process.exit(2)
+    }
+    if (!Number.isInteger(maxTurns) || maxTurns <= 0) throw new Error("--max-turns must be a positive integer")
+  }
   if (hosts.length === 0) {
     console.error(`error: no harness CLIs on PATH (wanted ${resolution.wanted.join(", ")})`)
     process.exit(2)
   }
 
-  const out = arg("--out") ?? mintCellDir()
-  fs.mkdirSync(out, { recursive: true })
-  const { skillDir } = extractSkill({ skill, ref, dest: path.join(out, "extract") })
+  const out = prepareOutput(arg("--out") ?? mintCellDir())
+  fs.writeFileSync(path.join(out, "task.md"), taskText, { flag: "wx" })
+  const sourceRev = spawnSync("git", ["rev-parse", "--verify", `${ref === WORKTREE_REF ? "HEAD" : ref}^{commit}`], {
+    cwd: REPO_ROOT, encoding: "utf8",
+  })
+  if (ref !== WORKTREE_REF && sourceRev.status !== 0) throw new Error(`cannot resolve ref: ${ref}`)
+  const resolvedRef = ref === WORKTREE_REF ? ref : sourceRev.stdout.trim()
+  const { skillDir } = extractSkill({ skill, ref: resolvedRef, dest: path.join(out, "extract") })
+  const companionNames = (arg("--with-skill") ?? "").split(",").map((s) => s.trim()).filter(Boolean)
+  const companions = companionNames.map((name) => ({
+    name,
+    dir: extractSkill({ skill: name, ref: resolvedRef, dest: path.join(out, "extract") }).skillDir,
+  }))
   const workspace = path.join(out, "workspace")
-  // A reused --out otherwise keeps the previous run's files, commits, and mutations,
-  // and --git-init skips reseeding because the old .git is still there.
-  fs.rmSync(workspace, { recursive: true, force: true })
-  fs.rmSync(path.join(out, "hosts"), { recursive: true, force: true })
   const fixture = arg("--fixture")
   if (fixture) copyFixture(fixture, workspace)
   else fs.mkdirSync(workspace, { recursive: true })
@@ -224,6 +302,28 @@ async function main() {
     spawnSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"], { cwd: workspace })
   }
 
+  writeJSON(path.join(out, "input-manifest.json"), {
+    schema_version: 1,
+    started_at: new Date().toISOString(),
+    requested_ref: ref,
+    source_commit: sourceRev.status === 0 ? sourceRev.stdout.trim() : null,
+    source_commit_is_skill_identity: ref !== WORKTREE_REF,
+    skill: fingerprint(skillDir),
+    initial_workspace: fingerprint(workspace),
+    task_sha256: sha256(taskText),
+    persona_sha256: personaText === null ? null : sha256(personaText),
+    max_turns: personaText === null ? null : maxTurns,
+    harness: fingerprint(import.meta.dir, fs.readdirSync(import.meta.dir).filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))),
+    runtime: { bun: Bun.version, node: process.version, platform: process.platform, arch: process.arch },
+    timeout_ms: timeoutMs,
+    read_only: readOnly,
+    git_init: flag("--git-init"), git_remote: flag("--git-remote"),
+    git_untracked: arg("--git-untracked") ?? null, git_staged: arg("--git-staged") ?? null,
+    requested_model: null,
+    observed_model: null,
+    limits: ["model/configuration inherited from host; not captured", "provider state and external resources are not frozen", ".git internals and symlink target contents are not hashed"],
+  }, true)
+
   const summary: Record<string, unknown> = {
     skill,
     ref,
@@ -241,12 +341,27 @@ async function main() {
     cells: {},
   }
 
+  writeJSON(path.join(out, "summary.json"), summary)
   for (const host of hosts) {
     const hostDir = path.join(out, "hosts", host)
     const hostWorkspace = path.join(hostDir, "workspace")
+    const hostSkillDir = path.join(hostDir, "skill")
     fs.mkdirSync(hostDir, { recursive: true })
     copyFixture(workspace, hostWorkspace)
-    const hostPrompt = wrapPrompt({ skillDir, workspace: hostWorkspace, task: taskText })
+    // Script imports can create caches. Keep the input snapshot unchanged and
+    // give every host its own execution copy, included in the sealed evidence.
+    fs.cpSync(skillDir, hostSkillDir, { recursive: true })
+    const hostCompanions = companions.map((c) => {
+      const dir = path.join(hostDir, "skills", c.name)
+      fs.cpSync(c.dir, dir, { recursive: true })
+      return { name: c.name, dir }
+    })
+    const hostPrompt = wrapPrompt({
+      skillDir: hostSkillDir,
+      workspace: hostWorkspace,
+      task: taskText,
+      companions: hostCompanions,
+    })
     const promptFile = path.join(hostDir, "prompt.md")
     fs.writeFileSync(promptFile, hostPrompt)
     const plan = planHost(host, {
@@ -254,6 +369,7 @@ async function main() {
       prompt: hostPrompt,
       promptFile,
       readOnly,
+      reasoningEffort: arg("--reasoning-effort"),
     })
     const shims: PathShim[] = []
     if (flag("--shim-git-push")) {
@@ -286,7 +402,23 @@ async function main() {
     if (shims.length > 0) Object.assign(plan.env, installPathShims(hostDir, shims))
     fs.writeFileSync(path.join(hostDir, "argv.json"), `${JSON.stringify(plan.argv, null, 2)}\n`)
     fs.writeFileSync(path.join(hostDir, "notes.txt"), `${plan.notes.join("\n")}\n`)
-    const result = await runPlan(plan, hostWorkspace, timeoutMs)
+    const cli = Bun.which(plan.argv[0])
+    const version = cli ? spawnSync(cli, ["--version"], {
+      env: plan.env, cwd: hostWorkspace, encoding: "utf8", timeout: 5000, maxBuffer: 8192,
+    }) : null
+    writeJSON(path.join(hostDir, "runtime.json"), {
+      executable: cli,
+      version: version?.status === 0 ? version.stdout.trim().slice(0, 1024) : null,
+      version_probe_ok: version?.status === 0,
+      requested_model: null,
+      observed_model: null,
+    }, true)
+    const conversation = personaText !== null
+      ? await converse(host, plan, hostWorkspace, hostDir, { prompt: hostPrompt, persona: personaText, timeoutMs, maxTurns })
+      : null
+    const result = conversation ?? (await runPlan(plan, hostWorkspace, timeoutMs))
+    // A conversation runs its own per-turn commands, not the single-turn plan written above.
+    if (conversation) fs.writeFileSync(path.join(hostDir, "argv.json"), `${JSON.stringify(conversation.argvs, null, 2)}\n`)
     fs.writeFileSync(path.join(hostDir, "stdout.txt"), result.stdout)
     fs.writeFileSync(path.join(hostDir, "stderr.txt"), result.stderr)
     fs.writeFileSync(
@@ -299,11 +431,17 @@ async function main() {
       timedOut: result.timedOut,
       stdout_bytes: Buffer.byteLength(result.stdout),
       stderr_bytes: Buffer.byteLength(result.stderr),
+      process_outcome: result.timedOut ? "timeout" : result.exitCode === 0 ? "completed" : "nonzero-or-spawn-error",
+      ...(conversation ? { turns: conversation.turns, conversation_ended: conversation.ended } : {}),
     }
+    writeJSON(path.join(out, "summary.json"), summary)
   }
 
   const summaryPath = path.join(out, "summary.json")
-  fs.writeFileSync(summaryPath, `${JSON.stringify(summary, null, 2)}\n`)
+  // Written only after every host has exited: a host with filesystem access could
+  // otherwise read the persona's hidden needs instead of eliciting them.
+  if (personaText !== null) fs.writeFileSync(path.join(out, "persona.md"), personaText, { flag: "wx" })
+  sealEvidence(out)
   console.log(summaryPath)
 }
 

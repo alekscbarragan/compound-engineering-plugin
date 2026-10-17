@@ -10,6 +10,8 @@ It is optional. A completed or non-trivial fix is not enough: skip it when the f
 
 ---
 
+Captures land in `docs/solutions/`, where `ce-plan`'s research and `ce-code-review`'s learnings pass rediscover them. Declared [Compound Packs](./packs.md#growing-packs-from-learnings) participate in capture too: an insight a pack rule already prescribes is recognized rather than re-captured, and interactive runs can route a prescriptive, cross-repo capture directly into a writable pack — or scaffold a new one — with the learning rewritten as a rule.
+
 ## TL;DR
 
 | Question | Answer |
@@ -80,7 +82,7 @@ Most teams solve the same problem twice, sometimes with the same person, because
 - The anti-patterns disappear first. What did not work was the most expensive part of the investigation, and it never gets written down.
 - Capture waits until the end of the session, when the context has already faded.
 
-`ce-compound` runs the capture at the moment context is freshest. Two modes (Full runs parallel subagents for cross-referencing and duplicate detection; Lightweight is single-pass). An overlap check decides whether to update an existing doc rather than create a duplicate. A discoverability check makes sure the project's instruction file points future agents at `docs/solutions/`. Bug-track and knowledge-track docs get different section structures. Specialized post-review (performance, security, data integrity, read-only simplification) can look over the drafted learning without touching product code.
+`ce-compound` runs the capture at the moment context is freshest. It has two modes: Full runs parallel subagents for cross-referencing and duplicate detection; Lightweight is single-pass. An overlap check decides whether to update an existing doc rather than create a duplicate. A discoverability check makes sure the project's instruction file points future agents at `docs/solutions/`. Bug-track and knowledge-track docs get different section structures. Specialized post-review (performance, security, data integrity, read-only simplification) can look over the drafted learning without touching product code.
 
 ---
 
@@ -88,7 +90,7 @@ Most teams solve the same problem twice, sometimes with the same person, because
 
 ### Two modes, agent-selected
 
-Full mode runs three research subagents in parallel (Context Analyzer, Solution Extractor, Related Docs Finder), plus an automatic session-history probe across Claude Code, Codex, Cursor, Pi, and oh-my-pi (omp). It cross-references existing docs, detects duplicates, and runs specialized reviews.
+Full mode classifies the learning and drafts its body in the main session, which holds the conversation, while a Related Docs Finder subagent searches existing docs, plus an automatic session-history probe across Claude Code, Codex, Cursor, Pi, and oh-my-pi (omp). It cross-references existing docs, detects duplicates, and runs specialized reviews.
 
 Lightweight mode writes the same doc type in a single pass. No subagents, no overlap detection, no session-history research, no semantic grounding validation.
 
@@ -107,6 +109,8 @@ The track determines section order and frontmatter fields.
 
 `problem_type`, `severity`, and `resolution_type` are closed enums. `component` and `root_cause` are open vocabulary, and the category directories are a default layout, not a mandate. When `docs/solutions/` already holds learnings, the classifier samples their frontmatter and directory names and reuses what the corpus already uses for the area. It falls back to the schema's suggested values only for an empty corpus or an uncovered area. Repos with their own documentation vocabulary keep it, so their existing retrieval still finds the new doc.
 
+Some guidance holds only while something outside the repo holds: an open upstream bug, a tool or platform version, a dependency's behavior. Such a learning also records `retire_when`, which names the change that would retire it and how to check for it without changing the repo, so `ce-compound-refresh` can tell when it stops applying. Most learnings have no such condition and omit the field.
+
 ### Overlap, discoverability, and grounding
 
 The Related Docs Finder scores overlap with existing `docs/solutions/` content across five dimensions: problem statement, root cause, solution approach, referenced files, prevention rules.
@@ -117,7 +121,7 @@ The Related Docs Finder scores overlap with existing `docs/solutions/` content a
 
 Every run also checks whether the project's instruction file (`AGENTS.md` or `CLAUDE.md`) would lead a future agent to discover `docs/solutions/`. If not, interactive Full proposes the smallest addition that surfaces the knowledge store, asks for consent, and applies it. Non-interactive reports `Instruction-file edit: gap noted, not applied` without editing. Lightweight tips only.
 
-Before the doc compounds, its claims get checked against the tree. A deterministic script checks cited repo paths, commit SHAs, relative links, and dangling scaffold (flags are adjudicated, not auto-failed). Then a read-only validator subagent (Full mode, including non-interactive Full) verifies code-behavior claims by quoting the defining source line, and merge-state claims against remote truth. Lightweight keeps the deterministic check and skips the validator subagent.
+Before the doc compounds, the skill checks its claims against the tree. A deterministic script checks cited repo paths, commit SHAs, relative links, and dangling scaffold (flags are adjudicated, not auto-failed). Then a read-only validator subagent (Full mode, including non-interactive Full) verifies code-behavior claims by quoting the defining source line, and merge-state claims against remote truth. Lightweight keeps the deterministic check and skips the validator subagent.
 
 ### Session history, refresh, and the capture checkpoint
 
@@ -135,7 +139,7 @@ You've just spent 45 minutes debugging an N+1 query in the brief-generation flow
 
 The completion phrase marks the checkpoint. The agent applies the counterfactual, determines that a future engineer could plausibly repeat the investigation from the final implementation alone, and auto-invokes `ce-compound`. With plenty of context left, it picks Full mode and notes "Ran Full mode." at the top of its output. No prompt.
 
-Three subagents dispatch in parallel. Context Analyzer classifies the work as `performance_issue` (bug track) and proposes the filename and category. Solution Extractor structures the fix with before/after code. Related Docs Finder reports moderate overlap with an older doc on a different N+1 case. Alongside them, the session-history probe scans recent sessions; none clear the relevance bar, so it records "no relevant prior sessions."
+The Related Docs Finder dispatches in the background. While it searches, the agent classifies the work as `performance_issue` (bug track), picks the filename and category, and drafts the fix with before/after code and the dead ends from the session. The finder reports moderate overlap with an older doc on a different N+1 case. Alongside them, the session-history probe scans recent sessions; none clear the relevance bar, so it records "no relevant prior sessions."
 
 The orchestrator assembles the doc, validates frontmatter, and writes `docs/solutions/performance-issues/n-plus-one-brief-generation.md`. Grounding validation runs next: the mechanical script confirms every cited path and SHA resolves, and the validator subagent quotes the source line behind the doc's claim about the ORM's default batching behavior. The discoverability check finds `AGENTS.md` does not mention `docs/solutions/`, proposes a one-line addition, and applies it after you confirm.
 
@@ -195,7 +199,7 @@ A few phrases in those standing lines are load-bearing:
 - "invoke the `ce-compound` skill", not "run `/ce-compound`": instruction files are read by whatever agent you are using, and the slash-command form is not reliably agent-callable across all of them.
 - "at the completion checkpoint", with the deadline as commit-reachability rather than a PR event: a PR can open early, so any deadline pegged to PR creation is already past by the time the work finishes. Whether the learning can still be committed to the producing PR holds in every case.
 - "not readily recoverable" and the counterfactual: the bar is preserving reasoning that the primary artifacts do not already carry, not the effort or size of the fix.
-- "treats captured learnings as tracked, committed knowledge", not a named folder: the real question is whether the repo welcomes generated docs. Forks and OSS projects you contribute to often do not, and a named path goes stale since `docs_root` can move the store.
+- "treats captured learnings as tracked, committed knowledge", not a named folder: the question is whether the repo welcomes generated docs. Forks and OSS projects you contribute to often do not, and a named path goes stale since `docs_root` can move the store.
 
 ---
 
