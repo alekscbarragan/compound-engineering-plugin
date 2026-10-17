@@ -34,6 +34,7 @@ const base = {
   document_path: "docs/plans/2026-10-16-example-plan.md",
   origin_path: "product_contract_source:ce-brainstorm",
   settled_ktds: "none",
+  pack_constraints: "",
   document_content: "# Example plan\n\nDOCUMENT-BODY-MARKER.",
   decision_primer: "<prior-decisions>\nRound 1 — no prior decisions.\n</prior-decisions>",
 }
@@ -54,9 +55,9 @@ const round2Primer = [
 const OUTPUT_CONTRACT_OPEN =
   "<output-contract>\nReturn ONLY valid JSON matching the findings schema below. No prose, no markdown, no explanation outside the JSON object.\n\n"
 const PROSE_MENTION =
-  "The decision primer (the `<prior-decisions>` block in your prompt) carries forward prior-round Applied/Skipped/Deferred decisions."
+  "The decision primer carries prior-round Applied/Skipped/Deferred decisions."
 const OUTPUT_CONTRACT_CLOSE =
-  "The advisory rule applies only to shapes that are NOT in the FP catalog.\n</output-contract>\n"
+  "are decision provenance, not prose clutter. Never flag them for removal or rewording.\n\n</output-contract>\n"
 const PRIMER_RULES_OPEN =
   "<decision-primer-rules>\nWhen the `<prior-decisions>` block above lists entries (round 2+), honor them:"
 
@@ -69,6 +70,8 @@ function expectedReviewContext(primer: string): string {
     `Settled decisions: ${base.settled_ktds}`,
     "",
     primer,
+    "",
+    base.pack_constraints,
     "",
     "Document content:",
     base.document_content,
