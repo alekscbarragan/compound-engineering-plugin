@@ -1417,6 +1417,32 @@ describe("writeCodexBundle preserves user-managed skill and agent paths", () => 
     expect(manifest.skills).not.toContain("skill-one")
   })
 
+  test("replaces a skill left behind by an install that failed partway", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "codex-partial-install-"))
+    const codexRoot = path.join(tempRoot, ".codex")
+    const installed = path.join(codexRoot, "skills", "compound-engineering", "skill-one", "SKILL.md")
+    const skillOne = {
+      name: "skill-one",
+      sourceDir: path.join(import.meta.dir, "fixtures", "sample-plugin", "skills", "skill-one"),
+    }
+    const bundle = (skillDirs: CodexBundle["skillDirs"]): CodexBundle => ({
+      pluginName: "compound-engineering",
+      prompts: [],
+      skillDirs,
+      generatedSkills: [],
+    })
+
+    await expect(
+      writeCodexBundle(codexRoot, bundle([skillOne, { name: "skill-two", sourceDir: path.join(tempRoot, "missing") }])),
+    ).rejects.toThrow()
+    await fs.writeFile(installed, "# left by the failed install\n")
+
+    await writeCodexBundle(codexRoot, bundle([skillOne]))
+
+    expect(await fs.readFile(installed, "utf8")).not.toBe("# left by the failed install\n")
+    expect((await readInstallManifest(codexRoot)).skills).toContain("skill-one")
+  })
+
   test("still replaces a real skill directory previously installed by this tool", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "codex-replace-managed-skill-"))
     const codexRoot = path.join(tempRoot, ".codex")
@@ -1722,4 +1748,52 @@ describe("writeCodexBundle guards against ancestor-symlink traversal", () => {
       expect((await readInstallManifest(codexRoot)).skills).not.toContain("skill-one")
     },
   )
+})
+
+describe("writeCodexBundle preserves user-managed prompt files", () => {
+  function bundleWith(content: string): CodexBundle {
+    return {
+      pluginName: "compound-engineering",
+      prompts: [
+        { name: "managed", content },
+        { name: "forked", content },
+      ],
+      skillDirs: [],
+      generatedSkills: [],
+    }
+  }
+
+  async function manifestPrompts(codexRoot: string): Promise<string[]> {
+    const raw = await fs.readFile(path.join(codexRoot, "compound-engineering", "install-manifest.json"), "utf8")
+    return (JSON.parse(raw) as { prompts: string[] }).prompts
+  }
+
+  test.skipIf(!canFileSymlink)("does not write through a symlinked prompt", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "codex-preserve-prompt-symlink-"))
+    const codexRoot = path.join(tempRoot, ".codex")
+    await writeCodexBundle(codexRoot, bundleWith("v1"))
+
+    const forkPrompt = path.join(tempRoot, "fork-prompt.md")
+    await fs.writeFile(forkPrompt, "user prompt\n")
+    await fs.rm(path.join(codexRoot, "prompts", "forked.md"))
+    await fs.symlink(forkPrompt, path.join(codexRoot, "prompts", "forked.md"))
+
+    await writeCodexBundle(codexRoot, bundleWith("v2"))
+
+    expect(await fs.readFile(forkPrompt, "utf8")).toBe("user prompt\n")
+    expect(await fs.readFile(path.join(codexRoot, "prompts", "managed.md"), "utf8")).toBe("v2\n")
+    expect(await manifestPrompts(codexRoot)).toEqual(["managed.md"])
+  })
+
+  test("preserves an unmanaged real prompt file", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "codex-preserve-prompt-unmanaged-"))
+    const codexRoot = path.join(tempRoot, ".codex")
+    await fs.mkdir(path.join(codexRoot, "prompts"), { recursive: true })
+    await fs.writeFile(path.join(codexRoot, "prompts", "forked.md"), "hand-authored\n")
+
+    await writeCodexBundle(codexRoot, bundleWith("v1"))
+
+    expect(await fs.readFile(path.join(codexRoot, "prompts", "forked.md"), "utf8")).toBe("hand-authored\n")
+    expect(await manifestPrompts(codexRoot)).toEqual(["managed.md"])
+  })
 })

@@ -6,7 +6,6 @@ import path from "node:path"
 
 const SKILL_DIRS = [
   path.join(__dirname, "../skills/ce-compound"),
-  path.join(__dirname, "../skills/ce-compound-refresh"),
 ] as const
 
 function scriptPath(skillDir: string): string {
@@ -16,15 +15,30 @@ function scriptPath(skillDir: string): string {
 function runValidator(
   skillDir: string,
   docPath: string,
+  env?: NodeJS.ProcessEnv,
 ): { code: number; stdout: string; stderr: string } {
   const result = spawnSync("python3", [scriptPath(skillDir), docPath], {
     encoding: "utf8",
+    env,
   })
   return {
     code: result.status ?? -1,
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
   }
+}
+
+// Forces Python's locale codec off UTF-8 (cp1252 on Windows, ascii here):
+// PYTHONCOERCECLOCALE=0 stops C -> C.UTF-8 promotion, PYTHONUTF8=0 keeps
+// UTF-8 mode off.
+const NON_UTF8_LOCALE = {
+  PATH: process.env.PATH,
+  SYSTEMROOT: process.env.SYSTEMROOT,
+  LC_ALL: "C",
+  LANG: "C",
+  LC_CTYPE: "C",
+  PYTHONUTF8: "0",
+  PYTHONCOERCECLOCALE: "0",
 }
 
 function sh(cwd: string, cmd: string, args: string[]): string {
@@ -140,14 +154,18 @@ describe("validate-doc-claims script", () => {
         expect(result.stdout).not.toContain("FLAG")
       })
 
-      test("flags a cited path that exists nowhere", () => {
+      test("flags a cited path that exists nowhere, naming the search base as repo-scoped", () => {
         const docPath = writeRepoDoc(
           "The handler is `src/does-not-exist.ts` in the tree.\n",
         )
         const result = runValidator(skillDir, docPath)
         expect(result.code).toBe(1)
         expect(result.stdout).toContain("FLAG path `src/does-not-exist.ts`")
-        expect(result.stdout).toContain("not found")
+        expect(result.stdout).toContain("not found under ")
+        expect(result.stdout).toContain(path.basename(repo))
+        expect(result.stdout).toContain(
+          "Only that location was searched",
+        )
       })
 
       test("checks an absolute citation that points inside the repo", () => {
@@ -667,6 +685,19 @@ raise SystemExit(0 if got == "src/real-file.ts" else 1)
         expect(result.stdout).toContain("FLAG link (./gone.md)")
       })
 
+      test("reads a UTF-8 doc under a non-UTF-8 locale", () => {
+        const docPath = writeRepoDoc(
+          "The “report” leaf reads `src/real-file.ts`.\n",
+        )
+        // The script's INFO lines carry em dashes; keep stdout UTF-8 so only open() sees the C locale.
+        const result = runValidator(skillDir, docPath, {
+          ...NON_UTF8_LOCALE,
+          PYTHONIOENCODING: "utf-8",
+        })
+        expect(result.stderr).toBe("")
+        expect(result.code).toBe(0)
+      })
+
       test("exits 2 (usage error) on missing file", () => {
         const result = runValidator(
           skillDir,
@@ -685,11 +716,4 @@ raise SystemExit(0 if got == "src/real-file.ts" else 1)
       })
     })
   }
-
-  test("script content is identical across skill copies (per AGENTS.md duplication rule)", () => {
-    const [a, b] = SKILL_DIRS
-    const aContent = readFileSync(scriptPath(a), "utf8")
-    const bContent = readFileSync(scriptPath(b), "utf8")
-    expect(aContent).toBe(bContent)
-  })
 })

@@ -15,7 +15,7 @@ import { transformContentForPi } from "../converters/claude-to-pi"
 import type { PiBundle } from "../types/pi"
 import { getLegacyPiArtifacts } from "../data/plugin-legacy-artifacts"
 import { cleanupStaleAgents, isLegacyAgentArtifactOwned, isLegacySkillArtifactOwned } from "../utils/legacy-cleanup"
-import { isPathWithinRoot, isPreservedSymlink, lstatOrNull, resolveLegacyManagedDir, resolveManagedSegment, storeRootEscapesManagedRoot } from "./managed-artifacts"
+import { entriesToClaim, isPathWithinRoot, isPreservedSymlink, lstatOrNull, resolveLegacyManagedDir, resolveManagedSegment, storeRootEscapesManagedRoot } from "./managed-artifacts"
 
 const PI_AGENTS_BLOCK_START = "<!-- BEGIN COMPOUND PI TOOL MAP -->"
 const PI_AGENTS_BLOCK_END = "<!-- END COMPOUND PI TOOL MAP -->"
@@ -92,9 +92,28 @@ export async function writePiBundle(outputRoot: string, bundle: PiBundle): Promi
   if (!agentsEscaped) await cleanupRemovedAgents(paths.agentsDir, manifest, currentAgents)
   if (!extensionsEscaped) await cleanupRemovedExtensions(paths.extensionsDir, manifest, currentExtensions)
 
+  if (pluginName) {
+    await writeInstallManifest(paths.managedDir, {
+      version: 1,
+      pluginName,
+      skills: await entriesToClaim(paths.skillsDir, manifest?.skills ?? [], currentSkills, skillsEscaped),
+      prompts: await entriesToClaim(paths.promptsDir, manifest?.prompts ?? [], currentPrompts, promptsEscaped),
+      extensions: await entriesToClaim(paths.extensionsDir, manifest?.extensions ?? [], currentExtensions, extensionsEscaped),
+      agents: await entriesToClaim(paths.agentsDir, manifest?.agents ?? [], currentAgents, agentsEscaped),
+    })
+  }
+
+  const preservedPromptNames = new Set<string>()
   if (!promptsEscaped) {
+    const ownedPrompts = pluginName ? (manifest?.prompts ?? []) : null
     for (const prompt of bundle.prompts) {
-      await writeText(path.join(paths.promptsDir, `${sanitizePathName(prompt.name)}.md`), prompt.content + "\n")
+      const promptFile = `${sanitizePathName(prompt.name)}.md`
+      const targetPath = path.join(paths.promptsDir, promptFile)
+      if (await cleanupCurrentManagedFile(targetPath, ownedPrompts, promptFile)) {
+        preservedPromptNames.add(promptFile)
+        continue
+      }
+      await writeText(targetPath, prompt.content + "\n")
     }
   }
 
@@ -139,7 +158,7 @@ export async function writePiBundle(outputRoot: string, bundle: PiBundle): Promi
       continue
     }
     const targetPath = path.join(paths.agentsDir, agentFileName)
-    const preserved = await cleanupCurrentManagedAgentFile(targetPath, manifest, agentFileName)
+    const preserved = await cleanupCurrentManagedFile(targetPath, manifest?.agents ?? [], agentFileName)
     if (preserved) {
       preservedAgentNames.add(agentFileName)
       continue
@@ -147,9 +166,16 @@ export async function writePiBundle(outputRoot: string, bundle: PiBundle): Promi
     await writeText(targetPath, agent.content + "\n")
   }
 
+  const preservedExtensionNames = new Set<string>()
   if (!extensionsEscaped) {
+    const ownedExtensions = pluginName ? (manifest?.extensions ?? []) : null
     for (const extension of bundle.extensions) {
-      await writeText(path.join(paths.extensionsDir, extension.name), extension.content + "\n")
+      const targetPath = path.join(paths.extensionsDir, extension.name)
+      if (await cleanupCurrentManagedFile(targetPath, ownedExtensions, extension.name)) {
+        preservedExtensionNames.add(extension.name)
+        continue
+      }
+      await writeText(targetPath, extension.content + "\n")
     }
   }
 
@@ -171,8 +197,8 @@ export async function writePiBundle(outputRoot: string, bundle: PiBundle): Promi
       version: 1,
       pluginName,
       skills: currentSkills.filter((name) => !preservedSkillNames.has(name)),
-      prompts: promptsEscaped ? [] : currentPrompts,
-      extensions: extensionsEscaped ? [] : currentExtensions,
+      prompts: promptsEscaped ? [] : currentPrompts.filter((name) => !preservedPromptNames.has(name)),
+      extensions: extensionsEscaped ? [] : currentExtensions.filter((name) => !preservedExtensionNames.has(name)),
       agents: currentAgents.filter((name) => !preservedAgentNames.has(name)),
     })
     await archiveLegacyInstallManifestIfOwned(paths.managedDir, pluginName)
@@ -414,7 +440,9 @@ async function cleanupRemovedPrompts(
   for (const promptFile of manifest.prompts) {
     if (current.has(promptFile)) continue
     if (!isSafeManagedPath(promptsDir, promptFile)) continue
-    await fs.rm(path.join(promptsDir, promptFile), { force: true })
+    const targetPath = path.join(promptsDir, promptFile)
+    if (await isPreservedSymlink(targetPath)) continue
+    await fs.rm(targetPath, { force: true })
   }
 }
 
@@ -428,7 +456,9 @@ async function cleanupRemovedExtensions(
   for (const extensionFile of manifest.extensions) {
     if (current.has(extensionFile)) continue
     if (!isSafeManagedPath(extensionsDir, extensionFile)) continue
-    await fs.rm(path.join(extensionsDir, extensionFile), { force: true })
+    const targetPath = path.join(extensionsDir, extensionFile)
+    if (await isPreservedSymlink(targetPath)) continue
+    await fs.rm(targetPath, { force: true })
   }
 }
 
@@ -470,10 +500,13 @@ async function cleanupCurrentManagedSkillDir(
   return false
 }
 
-async function cleanupCurrentManagedAgentFile(
+// Returns true when the existing path was preserved (skip cleanup AND the
+// subsequent write -- writing through a preserved symlink would clobber the
+// user's fork, which is worse than not overwriting at all).
+async function cleanupCurrentManagedFile(
   targetPath: string,
-  manifest: PiInstallManifest | null,
-  agentFileName: string,
+  owned: readonly string[] | null,
+  fileName: string,
 ): Promise<boolean> {
   const stat = await lstatOrNull(targetPath)
   if (!stat) return false
@@ -481,7 +514,8 @@ async function cleanupCurrentManagedAgentFile(
     console.warn(`Skipping ${targetPath}: existing user-managed symlink (not overwritten)`)
     return true
   }
-  if (!manifest?.agents.includes(agentFileName)) {
+  if (owned === null) return false
+  if (!owned.includes(fileName)) {
     console.warn(`Skipping ${targetPath}: existing unmanaged file (not overwritten)`)
     return true
   }

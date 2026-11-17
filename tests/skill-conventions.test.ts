@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from "fs"
 import path from "path"
 import { describe, expect, test } from "bun:test"
+import { load } from "js-yaml"
 import { parseFrontmatter } from "../src/utils/frontmatter"
 
 const ROOT_AGENTS = readFileSync(path.join(process.cwd(), "AGENTS.md"), "utf8")
@@ -183,6 +184,10 @@ const DESCRIPTION_CHAR_BUDGET = 1024
 const NAME_CHAR_BUDGET = 64
 
 const EXPECTED_USER_INVOKED_SKILLS = new Set([
+  // ce-help: recommends a command and stops. Firing it unasked on a question like
+  // "what next?" would halt work in progress, and a miss costs little because the
+  // agent can still answer from skill descriptions. No skill or pipeline calls it.
+  "ce-help",
   "ce-dogfood",
   "ce-polish",
   "ce-product-pulse",
@@ -192,9 +197,11 @@ const EXPECTED_USER_INVOKED_SKILLS = new Set([
   // it, and model-routing it would let a cheaper request escalate into an
   // expensive measurement program, so it stays user-invoked.
   "ce-retune",
-  "ce-setup",
   "ce-sweep",
   "ce-test-xcode",
+  // wtf: answers a user who says they did not follow something. No skill or
+  // pipeline calls it, and model-routing it would re-explain replies unasked.
+  "wtf",
 ])
 
 const REQUIRED_MODEL_INVOKED_CALLEES = new Set([
@@ -207,12 +214,15 @@ const REQUIRED_MODEL_INVOKED_CALLEES = new Set([
   "ce-debug",
   "ce-doc-review",
   "ce-ideate",
+  "ce-noslop",
   "ce-optimize",
   "ce-plan",
   "ce-proof",
   "ce-prototype",
   "ce-resolve-pr-feedback",
   "ce-riffrec-feedback-analysis",
+  // ce-setup: ce-compound hands standards work to it.
+  "ce-setup",
   "ce-simplify-code",
   "ce-strategy",
   "ce-test-browser",
@@ -365,10 +375,12 @@ const LOCAL_PATH_TOKEN = /^(references|scripts|assets)\/[A-Za-z0-9._/-]+$/
  * is placeholder-free, while a templated remainder (`.../scripts/<name>`)
  * still fails the token shape by construction.
  */
+function unquote(token: string): string {
+  return token.replace(/^["']/, "").replace(/["']$/, "")
+}
+
 function stripShellWrapping(token: string): string {
-  return token
-    .replace(/^["']/, "")
-    .replace(/["']$/, "")
+  return unquote(token)
     .replace(/^\$(?:\{[A-Za-z_][A-Za-z0-9_]*(?::-[^}]*)?\}|[A-Za-z_][A-Za-z0-9_]*)\//, "")
 }
 
@@ -388,12 +400,18 @@ function localPathTokensIn(text: string): string[] {
  * caught even when mentioned only as an executable command.
  */
 function extractLocalPathCodeSpans(markdown: string): Located[] {
+  return codeSpansIn(markdown).flatMap(({ lineNumber, value }) =>
+    localPathTokensIn(value).map((token) => ({ lineNumber, value: token })),
+  )
+}
+
+/** Backtick code-span contents with their line numbers. */
+function codeSpansIn(markdown: string): Located[] {
   const out: Located[] = []
   const spanRegex = /`([^`\n]+)`/g
   let match: RegExpExecArray | null
   while ((match = spanRegex.exec(markdown)) !== null) {
-    const lineNumber = lineNumberAt(markdown, match.index)
-    for (const token of localPathTokensIn(match[1])) out.push({ lineNumber, value: token })
+    out.push({ lineNumber: lineNumberAt(markdown, match.index), value: match[1] })
   }
   return out
 }
@@ -436,6 +454,35 @@ function extractFencedLocalPathTokens(markdown: string): Located[] {
     }
   }
   return out
+}
+
+const BARE_SCRIPT_PATH = /^(?:\.\/)?scripts\/[A-Za-z0-9._/-]+$/
+const SCRIPT_INTERPRETER = /^(?:bash|sh|zsh|python3?|py|node|bun|ruby|perl|"?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?"?)$/
+const SHELL_PREFIX_WORD = /^(?:then|do|else|exec|time|!|[A-Za-z_][A-Za-z0-9_]*=\S*)$/
+
+function bareScriptCallsIn(line: string, includeBareHead: boolean): string[] {
+  const out: string[] = []
+  for (const segment of line.replace(/`/g, " ").split(/;|&&|\|\||\||\$\(|\(/)) {
+    const words = segment.trim().split(/\s+/).filter(Boolean)
+    while (words.length && SHELL_PREFIX_WORD.test(words[0])) words.shift()
+    if (!words.length) continue
+    const head = unquote(words[0])
+    if (includeBareHead && BARE_SCRIPT_PATH.test(head)) out.push(head)
+    if (!SCRIPT_INTERPRETER.test(words[0])) continue
+    const target = words.slice(1).find((word) => !word.startsWith("-"))
+    if (target && BARE_SCRIPT_PATH.test(unquote(target))) out.push(unquote(target))
+  }
+  return out
+}
+
+// A bare `scripts/x` prose span is a Tier 2 pointer the agent resolves, so spans flag only interpreter calls.
+function findUnanchoredScriptCalls(markdown: string): Located[] {
+  const { prose, fencedLines } = partitionFencedCodeBlocks(markdown)
+  const calls = (spans: Located[], includeBareHead: boolean) =>
+    spans.flatMap(({ lineNumber, value }) =>
+      bareScriptCallsIn(value, includeBareHead).map((call) => ({ lineNumber, value: call })),
+    )
+  return [...calls(fencedLines, true), ...calls(codeSpansIn(prose), false)]
 }
 
 function isExternalLinkTarget(target: string): boolean {
@@ -862,6 +909,31 @@ describe("skill frontmatter limits (Anthropic skill spec)", () => {
     ).toEqual([])
   })
 
+  // Codex ignores the frontmatter flag; its opt-out is the skill's own
+  // agents/openai.yaml. The two must agree, or a manual-only skill stays
+  // implicitly invocable on Codex, or a callee vanishes from Codex's catalog.
+  test("Codex implicit-invocation policy mirrors disable-model-invocation", () => {
+    const mismatched: string[] = []
+    for (const skill of skillDirs) {
+      const skillMdPath = path.join(skill.absPath, "SKILL.md")
+      const { data } = parseFrontmatter(readFileSync(skillMdPath, "utf8"), skillMdPath)
+      const userInvoked = data["disable-model-invocation"] === true
+
+      const policyPath = path.join(skill.absPath, "agents", "openai.yaml")
+      const manifest = existsSync(policyPath)
+        ? (load(readFileSync(policyPath, "utf8")) as { policy?: { allow_implicit_invocation?: unknown } } | null)
+        : null
+      const codexOptedOut = manifest?.policy?.allow_implicit_invocation === false
+
+      if (userInvoked !== codexOptedOut) mismatched.push(path.basename(skill.absPath))
+    }
+
+    expect(
+      mismatched,
+      `disable-model-invocation: true and agents/openai.yaml policy.allow_implicit_invocation: false must be set together:\n${mismatched.join("\n")}`,
+    ).toEqual([])
+  })
+
   for (const skill of skillDirs) {
     const skillMdPath = path.join(skill.absPath, "SKILL.md")
     const raw = readFileSync(skillMdPath, "utf8")
@@ -934,6 +1006,22 @@ describe("platform-variable fallback (AGENTS.md 'Platform-Specific Variables in 
       `PLATFORM_VAR_ACKNOWLEDGED entries must correspond to a current non-graceful use — remove stale entries from tests/skill-conventions.test.ts:\n${stale.join("\n")}`,
     ).toEqual([])
   })
+
+  for (const skill of skillDirs) {
+    test(`${skill.relPath} executed bundled scripts are anchored by SKILL_DIR`, () => {
+      const offenders: string[] = []
+      for (const filePath of listMarkdownFiles(skill.absPath)) {
+        const fileRel = path.relative(REPO_ROOT, filePath)
+        for (const { lineNumber, value } of findUnanchoredScriptCalls(readFileSync(filePath, "utf8"))) {
+          offenders.push(`  ${fileRel}:${lineNumber} — ${value}`)
+        }
+      }
+      expect(
+        offenders,
+        `A bundled script the shell executes must be anchored: the Bash tool runs in the user's project, not the skill directory, so a bare \`bash scripts/x.sh\` misses (#764/#811/#898/#943). Set \`SKILL_DIR="<absolute path of the directory containing the SKILL.md you just read>";\` and call \`bash "$SKILL_DIR/scripts/x.sh"\` — see ${AGENTS_MD_REF} "Platform-Specific Variables in Skills". A prose pointer such as \`scripts/x\` with no interpreter is fine.\nOffending calls:\n${offenders.join("\n")}`,
+      ).toEqual([])
+    })
+  }
 })
 
 // ---------------------------------------------------------------------------
@@ -1054,6 +1142,45 @@ describe("extractAtIncludeTargets", () => {
     expect(extractAtIncludeTargets("@./references/<topic>.md")).toEqual([])
     expect(extractAtIncludeTargets("@message = Message.find(params[:id])")).toEqual([])
     expect(extractAtIncludeTargets("email user@scripts.example.com")).toEqual([])
+  })
+})
+
+describe("findUnanchoredScriptCalls", () => {
+  test("flags bare interpreter calls and bare command heads in fences", () => {
+    const sample = [
+      "```bash",
+      "bash scripts/check-health --version VERSION",
+      'python3 -I "scripts/extract.py" --out x.json',
+      "./scripts/clean-gone",
+      'OUT=$(scripts/get-pr-comments 12) && "$PY" scripts/run-log.py',
+      "```",
+    ].join("\n")
+    expect(findUnanchoredScriptCalls(sample)).toEqual([
+      { lineNumber: 2, value: "scripts/check-health" },
+      { lineNumber: 3, value: "scripts/extract.py" },
+      { lineNumber: 4, value: "./scripts/clean-gone" },
+      { lineNumber: 5, value: "scripts/get-pr-comments" },
+      { lineNumber: 5, value: "scripts/run-log.py" },
+    ])
+  })
+
+  test("flags interpreter calls in prose code spans", () => {
+    expect(findUnanchoredScriptCalls("Run `bash scripts/x.sh ARG` first.")).toEqual([
+      { lineNumber: 1, value: "scripts/x.sh" },
+    ])
+  })
+
+  test("passes anchored calls and prose pointers", () => {
+    const sample = [
+      'Run `scripts/get-pr-comments` or read [it](scripts/x.sh).',
+      "```bash",
+      'SKILL_DIR="<absolute path of the directory containing the SKILL.md you just read>";',
+      'bash "$SKILL_DIR/scripts/check-health" --version VERSION',
+      '"$PY" "$SKILL_DIR/scripts/pr-snapshot" mark',
+      "cat references/notes.md",
+      "```",
+    ].join("\n")
+    expect(findUnanchoredScriptCalls(sample)).toEqual([])
   })
 })
 
@@ -1463,6 +1590,49 @@ describe("python interpreter resolution (no bare python3 invocations)", () => {
       findBarePython3Invocations(
         'Never write inline scripts (`python3 -c`, `node -e`) to process issue data.',
       ),
+    ).toEqual([])
+  })
+})
+
+describe("review coverage fallback wording (issue #1732)", () => {
+  const RECOVERY = path.join(
+    REPO_ROOT,
+    "skills/ce-code-review/references/cross-model-recovery.md",
+  )
+  const PINNED_WORDING = "adversarial lens: in-process fallback"
+
+  test("did-not-run fallback branch pins the exact in-process Coverage wording", () => {
+    const content = readFileSync(RECOVERY, "utf8")
+    const fullForm =
+      /adversarial lens: in-process fallback \(cross-model peer not run: [^)]+\)/.test(
+        content,
+      ) && content.includes("peer.outcome: in-process-fallback")
+    expect(
+      fullForm,
+      `cross-model-recovery.md must pin the exact Coverage wording \`${PINNED_WORDING} (cross-model peer not run: <reason>)\` so a complete review is never reported with ce-work's ship-gate skip phrase (issue #1732).`,
+    ).toBe(true)
+  })
+
+  test("ce-code-review Coverage guidance never uses the ship-gate skip phrase", () => {
+    const skill = skillDirs.find((s) => s.relPath === "skills/ce-code-review")
+    if (!skill) throw new Error("skills/ce-code-review not found")
+    const offenders: string[] = []
+    for (const filePath of listMarkdownFiles(skill.absPath)) {
+      const fileRel = path.relative(REPO_ROOT, filePath)
+      const lines = readFileSync(filePath, "utf8").split("\n")
+      for (const [index, line] of lines.entries()) {
+        // The one legitimate occurrence names the phrase to forbid it
+        // (cross-model-recovery.md's "Never write `harness-native fallback`"):
+        // strip exactly that clause so the rest of the line is still checked.
+        const checked = line.replace(/never write `harness-native fallback`/i, "")
+        if (/harness-native fallback/i.test(checked)) {
+          offenders.push(`${fileRel}:${index + 1}`)
+        }
+      }
+    }
+    expect(
+      offenders,
+      "`harness-native fallback` is ce-work's ship-gate signal for a review that ran without ce-code-review; ce-code-review Coverage guidance must not reuse it for the in-process fallback (issue #1732).",
     ).toEqual([])
   })
 })

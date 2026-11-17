@@ -245,7 +245,7 @@ def main(argv: list[str]) -> int:
     if not os.path.isfile(doc_path):
         usage_fail(f"file not found: {doc_path}")
 
-    with open(doc_path) as f:
+    with open(doc_path, encoding="utf-8") as f:
         text = f.read()
 
     doc_dir = os.path.dirname(os.path.abspath(doc_path))
@@ -360,12 +360,13 @@ def main(argv: list[str]) -> int:
                 f"{upstream}: stale checkout? Annotate or verify against upstream."
             )
         else:
-            where = (
-                f"working tree or {upstream}" if upstream else "working tree"
-            )
             flags.append(
-                f"FLAG path `{token}`{loc} — not found in {where}. Fix the "
-                "citation, or annotate it as historical (e.g. removed by this fix)."
+                f"FLAG path `{token}`{loc} — not found under {base}"
+                + (f" or {upstream}" if upstream else "")
+                + ". Only that location was searched; check other repos or "
+                "stores before treating the citation as wrong. Fix the "
+                "citation, or annotate it as historical (e.g. removed by "
+                "this fix)."
             )
 
     # --- 2. Cited commit SHAs ----------------------------------------------

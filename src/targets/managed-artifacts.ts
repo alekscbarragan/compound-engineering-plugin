@@ -148,6 +148,23 @@ export async function writeManagedInstallManifest(
   await writeJson(path.join(managedDir, MANAGED_INSTALL_MANIFEST), manifest)
 }
 
+// Claimed before any write: with the manifest written only last, an install that
+// fails partway leaves files every later install preserves as unmanaged.
+export async function entriesToClaim(
+  rootDir: string,
+  owned: readonly string[],
+  current: readonly string[],
+  escaped: boolean,
+): Promise<string[]> {
+  const claimed = new Set(owned)
+  if (escaped) return [...claimed]
+  for (const entry of current) {
+    if (claimed.has(entry)) continue
+    if (!(await lstatOrNull(resolveArtifactPath(rootDir, entry)))) claimed.add(entry)
+  }
+  return [...claimed]
+}
+
 export async function cleanupRemovedManagedDirectories(
   rootDir: string,
   manifest: ManagedInstallManifest | null,
@@ -168,6 +185,10 @@ export async function cleanupRemovedManagedDirectories(
     // Never delete through a symlink node even when the stale manifest still
     // claims ownership.
     if (await isPreservedSymlink(targetPath)) continue
+    if (!(await isPathWithinRoot(rootDir, targetPath))) {
+      console.warn(`Skipping ${targetPath}: resolves outside the managed store (not modified)`)
+      continue
+    }
     await fs.rm(targetPath, { recursive: true, force: true })
   }
 }
@@ -185,6 +206,10 @@ export async function cleanupRemovedManagedFiles(
     if (!isSafeManagedPath(rootDir, relativePath)) continue
     const targetPath = resolveArtifactPath(rootDir, relativePath)
     if (await isPreservedSymlink(targetPath)) continue
+    if (!(await isPathWithinRoot(rootDir, targetPath))) {
+      console.warn(`Skipping ${targetPath}: resolves outside the managed store (not modified)`)
+      continue
+    }
     await fs.rm(targetPath, { force: true })
   }
 }
@@ -193,11 +218,16 @@ export async function cleanupRemovedManagedFiles(
 // subsequent copy/write -- writing through a preserved symlink would clobber
 // the user's fork, which is worse than not overwriting at all).
 export async function cleanupCurrentManagedDirectory(
+  rootDir: string,
   targetDir: string,
   manifest: ManagedInstallManifest | null,
   group: string,
   entryName: string,
 ): Promise<boolean> {
+  if (!(await isPathWithinRoot(rootDir, targetDir))) {
+    console.warn(`Skipping ${targetDir}: resolves outside the managed store (not modified)`)
+    return true
+  }
   const stat = await lstatOrNull(targetDir)
   if (!stat) return false
   if (stat.isSymbolicLink()) {
@@ -303,7 +333,7 @@ async function realpathNearestExisting(targetPath: string): Promise<string> {
  */
 export function isContainedPath(rootResolved: string, targetResolved: string): boolean {
   const rel = path.relative(rootResolved, targetResolved)
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))
+  return rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)
 }
 
 export async function isPathWithinRoot(rootDir: string, targetPath: string): Promise<boolean> {
